@@ -1,0 +1,15 @@
+{
+  "name": "rop_compiler",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "rop_compiler_bg.wasm",
+    "rop_compiler.js",
+    "rop_compiler.d.ts"
+  ],
+  "main": "rop_compiler.js",
+  "types": "rop_compiler.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

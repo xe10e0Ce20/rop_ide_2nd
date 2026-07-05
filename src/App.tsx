@@ -1,4 +1,4 @@
-// src/App.tsx
+import { version } from '../package.json';
 import { useEffect, useState, useMemo } from 'react';
 import Editor from '@monaco-editor/react';
 import type { Monaco } from '@monaco-editor/react';
@@ -6,12 +6,45 @@ import { ROP_LANG_ID, languageDef, configDef } from './ropLanguage';
 import { createRopCompletionProvider, createRopDefinitionProvider, createRopHoverProvider } from './ropCompletion';
 import type { WebCompileResult, AutocompleteMeta } from './types';
 
+
 import initWasm, { compile_for_web, get_autocomplete_metadata } from './wasm_pkg/rop_compiler';
+
+const LOCAL_STORAGE_KEY = 'rop_ide_source_code_cache';
 
 export default function App() {
   const [wasmReady, setWasmReady] = useState<boolean>(false);
-  const [code, setCode] = useState<string>(getSampleCode());
   const [editorWidth, setEditorWidth] = useState<number>(58); 
+
+  // 【核心功能】：只有当缓存彻底为空（或者首次打开）时，刷新才填入示例代码
+  const [code, setCode] = useState<string>(() => {
+    const cachedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (cachedData === null || cachedData === '') {
+      return getSampleCode();
+    }
+    return cachedData;
+  });
+
+  // 用户的代码一旦改变，立即存入本地持久化缓存（包括空字符串也会被如实记录）
+  useEffect(() => {
+    localStorage.setItem(LOCAL_STORAGE_KEY, code);
+  }, [code]);
+
+  // 注册 PWA 离线 Service Worker
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((reg) => console.log('Service Worker 注册成功，离线就绪: ', reg.scope))
+          .catch((err) => console.error('Service Worker 注册失败: ', err));
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    initWasm()
+      .then(() => setWasmReady(true))
+      .catch((err: unknown) => console.error("WASM 加载失败:", err));
+  }, []);
 
   // 边栏拖动逻辑
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -28,12 +61,6 @@ export default function App() {
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
   };
-
-  useEffect(() => {
-    initWasm()
-      .then(() => setWasmReady(true))
-      .catch((err: unknown) => console.error("WASM 加载失败:", err));
-  }, []);
 
   // 渲染时计算编译输出
   const compileOutput = useMemo<WebCompileResult | null>(() => {
@@ -65,7 +92,7 @@ export default function App() {
       rules: [
           { token: 'rop.keyword', foreground: '#C586C0', fontStyle: 'bold' },      // 核心控制流关键字
           { token: 'rop.directive', foreground: '#CE9178' },                        // 编译器指令
-          { token: 'rop.label.definition', foreground: '#d9662c', fontStyle: 'bold' }, // 标签定义
+          { token: 'rop.label.definition', foreground: '#D9662C', fontStyle: 'bold' }, // 标签定义
           { token: 'rop.label.reference', foreground: '#4FC1FF' },                 // 标签调用
           { token: 'rop.label.rawrefrence', foreground: '#8BE9FD' },                  // 标签原始引用（&）
           { token: 'rop.macro.call', foreground: '#DCDCAA' },                      // 宏函数调用
@@ -81,7 +108,7 @@ export default function App() {
 
     monaco.editor.setTheme('ropTheme');
 
-    // 1. 自动补全
+    // 1. 自动补全提供者
     monaco.languages.registerCompletionItemProvider(
       ROP_LANG_ID, 
       createRopCompletionProvider((src) => get_autocomplete_metadata(src) as AutocompleteMeta)
@@ -93,10 +120,10 @@ export default function App() {
       createRopDefinitionProvider()
     );
 
-    // 3. 【新增】宏悬停文档提示
+    // 3. 宏悬停文档提示 (Hover)
     monaco.languages.registerHoverProvider(
       ROP_LANG_ID,
-      createRopHoverProvider((src: string) => get_autocomplete_metadata(src) as AutocompleteMeta)
+      createRopHoverProvider((src) => get_autocomplete_metadata(src) as AutocompleteMeta)
     );
   };
 
@@ -104,8 +131,11 @@ export default function App() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#121212', color: '#e0e0e0', position: 'fixed', top: 0, left: 0}}>
       {/* 顶部状态栏 */}
       <div style={{ padding: '12px 24px', background: '#1a1a1a', borderBottom: '1px solid #2d2d2d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#00ffb3' }}>ROP IDE 2nd_Edition</h2>
-        <span style={{ fontSize: '11px', color: '#888' }}>v0.0.1</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#00ffb3' }}>ROP IDE 2nd Edition</h2>
+          <span style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>v{version}</span>
+        </div>
+        <span style={{ fontSize: '11px', color: '#888' }}>离线支持已启用 (PWA)</span>
       </div>
 
       <div style={{ display: 'flex', flex: 1, width: '100%' }}>
@@ -116,7 +146,7 @@ export default function App() {
             theme="ropTheme"
             language={ROP_LANG_ID}
             value={code}
-            onChange={(val) => setCode(val || '')}
+            onChange={(val) => setCode(val ?? '')}
             beforeMount={handleEditorWillMount}
             options={{ 
               fontSize: 14,
