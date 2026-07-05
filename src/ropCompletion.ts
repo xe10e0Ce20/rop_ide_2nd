@@ -227,15 +227,16 @@ export function createRopDefinitionProvider() {
   };
 }
 
-export function createRopHoverProvider(getWasmMetadata: (code: string) => AutocompleteMeta) {
+export function createRopHoverProvider(
+  getWasmMetadata: (code: string) => AutocompleteMeta,
+  getLibSource?: (libName: string) => string | undefined   // 新增可选参数
+) {
   return {
     provideHover: (model: any, position: any) => {
       const wordInfo = model.getWordAtPosition(position);
       if (!wordInfo) return null;
 
       const targetWord = wordInfo.word;
-      console.log('🔍 Hover triggered on:', targetWord);
-
       const currentCode = model.getValue();
       const totalLines = model.getLineCount();
 
@@ -251,57 +252,51 @@ export function createRopHoverProvider(getWasmMetadata: (code: string) => Autoco
           break;
         }
       }
-      console.log('  local def line:', defLineNumber);
 
       // 2. 获取 WASM 元数据
       let params: string[] = [];
       let isImportedMacro = false;
       try {
         const meta = getWasmMetadata(currentCode);
-        console.log('  WASM meta:', meta);
-        if (meta && meta.macro_details) {
-            const macroParams = getMacroParams(meta, targetWord);
-            // 如果参数列表非空，或者宏名字列表里有它，就认为是宏
-            if (macroParams.length > 0 || (meta.macro_names || []).includes(targetWord)) {
-                params = macroParams;
-                if (defLineNumber === -1) {
-                isImportedMacro = true;
-                }
-            }
+        if (meta?.macro_details) {
+          // 兼容 Map 和普通对象
+          if (meta.macro_details instanceof Map) {
+            params = meta.macro_details.get(targetWord) || [];
+          } else {
+            params = (meta.macro_details as Record<string, string[]>)[targetWord] || [];
+          }
+          // 没有本地 def 但 WASM 里有 → 导入宏
+          if (defLineNumber === -1 && (params.length > 0 || (meta.macro_names || []).includes(targetWord))) {
+            isImportedMacro = true;
+          }
         }
       } catch (e) {
-        console.error('  WASM metadata error:', e);
+        // 静默失败，不影响编辑体验
       }
 
-      console.log('  isImportedMacro:', isImportedMacro);
-      console.log('  params:', params);
+      if (defLineNumber === -1 && !isImportedMacro) return null;
 
-      if (defLineNumber === -1 && !isImportedMacro) {
-        console.log('  => no def and not imported, return null');
-        return null;
-      }
-
-      // 3. 兜底提取参数
+      // 3. 兜底：从本地 def 行提取参数（如果有）
       if (params.length === 0 && defLineText) {
         const paramMatch = defLineText.match(new RegExp(`\\bdef\\s+${targetWord}\\s*\\((.*?)\\)`));
-        if (paramMatch && paramMatch[1]) {
+        if (paramMatch?.[1]) {
           params = paramMatch[1].split(',').map(p => p.trim()).filter(p => p.length > 0);
         }
       }
 
       const signature = `macro ${targetWord}(${params.join(', ')})`;
-      console.log('  signature:', signature);
-
       const markdownContents = [
         { value: `\`\`\`rop\n${signature}\n\`\`\`` }
       ];
 
+      // 4. 提取文档注释
       if (defLineNumber !== -1) {
+        // 本地宏：从当前编辑器模型提取
         const docLines: string[] = [];
         for (let i = defLineNumber - 1; i >= 1; i--) {
           const lineText = model.getLineContent(i).trim();
           if (lineText.startsWith('//')) {
-            docLines.unshift(lineText.replace(/^\/\/ ?/, ''));
+            docLines.unshift(lineText.replace(/^\/\/\s*/, ''));
           } else if (lineText === '') {
             continue;
           } else {
@@ -309,11 +304,29 @@ export function createRopHoverProvider(getWasmMetadata: (code: string) => Autoco
           }
         }
         markdownContents.push({ value: docLines.length > 0 ? docLines.join('\n') : '*暂无文档说明*' });
+      } else if (isImportedMacro && getLibSource) {
+        // 导入宏：尝试从对应的库源码中提取注释
+        // 先找到当前文件中所有 @import 的库名
+        const importRegex = /@import\s*\(\s*([a-zA-Z_]\w*)\s*\)/g;
+        let match;
+        let docFromLib: string[] = [];
+        while ((match = importRegex.exec(currentCode)) !== null) {
+          const libName = match[1];
+          const libSource = getLibSource(libName);
+          if (libSource) {
+            const foundDoc = extractMacroDocFromSource(libSource, targetWord);
+            if (foundDoc.length > 0) {
+              docFromLib = foundDoc;
+              break;  // 找到注释即停止搜索
+            }
+          }
+        }
+        markdownContents.push({ value: docFromLib.length > 0 ? docFromLib.join('\n') : '*暂无文档说明*' });
       } else {
-        markdownContents.push({ value: '*来自导入库的宏定义*' });
+        markdownContents.push({ value: '*暂无文档说明*' });
       }
 
-      const result = {
+      return {
         range: {
           startLineNumber: position.lineNumber,
           startColumn: wordInfo.startColumn,
@@ -322,8 +335,6 @@ export function createRopHoverProvider(getWasmMetadata: (code: string) => Autoco
         },
         contents: markdownContents
       };
-      console.log('  returning hover:', result);
-      return result;
     }
   };
 }

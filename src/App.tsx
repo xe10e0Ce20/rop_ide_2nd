@@ -250,7 +250,10 @@ export default function App() {
     };
 
     // 2. 增强型 Hover 悬停提示
-    const nativeHoverProvider = createRopHoverProvider(getAutocompleteMetaWithLibs);
+    const nativeHoverProvider = createRopHoverProvider(
+      getAutocompleteMetaWithLibs,
+      (libName: string) => globalLibsRef.current.find(l => l.name === libName)?.code
+    );
     monaco.languages.registerHoverProvider(ROP_LANG_ID, {
       provideHover: async (model: any, position: any) => {
         const wordInfo = model.getWordAtPosition(position);
