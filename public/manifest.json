@@ -1,21 +1,24 @@
 {
-  "short_name": "ROP IDE2nd",
-  "name": "ROP IDE Compiler 2nd Edition",
+  "short_name": "ROP IDE",
+  "name": "ROP IDE Compiler Toolchain",
+  "description": "2nd Edition ROP Web IDE with Offline Compiler Support",
   "icons": [
     {
       "src": "icon.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
       "src": "icon.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ],
-  "start_url": ".",
-  "background_color": "#121212",
+  "start_url": "/",
+  "background_color": "#151515",
   "theme_color": "#1a1a1a",
   "display": "standalone",
-  "orientation": "portrait"
+  "orientation": "any"
 }
