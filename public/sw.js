@@ -4,7 +4,7 @@ const ASSETS = [
   '/index.html',
   '/manifest.json',
   '/icon.png'
-  // 如果你的 WASM 或者是 Monaco 的一些静态包在本地，也可以加进这个数组
+
 ];
 
 // 安装时缓存核心资源

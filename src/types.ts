@@ -1,8 +1,10 @@
 // src/types.ts
 export interface WebCompileResult {
   success: boolean;
-  error_message: string | null;
-  blocks: Record<string, string>;
+  error_message?: string | null;
+  line?: number | null; 
+  column?: number | null; 
+  blocks: Record<string, string>; 
 }
 
 export interface AutocompleteMeta {

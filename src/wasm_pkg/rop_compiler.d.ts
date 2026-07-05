@@ -1,24 +1,20 @@
 /* tslint:disable */
 /* eslint-disable */
 
-/**
- * 将 ROP 源代码编译为十六进制字符串并返回
- */
-export function compile_for_web(source_code: string): any;
+export function compile_for_web(source_code: string, fetch_lib_fn: Function): any;
 
-/**
- * 从源代码提取宏定义信息，供前端自动补全
- */
 export function get_autocomplete_metadata(source_code: string): any;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly compile_for_web: (a: number, b: number) => any;
+    readonly compile_for_web: (a: number, b: number, c: any) => any;
     readonly get_autocomplete_metadata: (a: number, b: number) => any;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_exn_store: (a: number) => void;
+    readonly __externref_table_alloc: () => number;
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_start: () => void;
 }

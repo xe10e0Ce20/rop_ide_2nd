@@ -1,6 +1,10 @@
 // src/ropCompletion.ts
 import type { AutocompleteMeta, DefInterval } from './types';
+import type { languages } from 'monaco-editor';
 
+declare const monaco: {
+    languages: typeof languages;
+};
 /**
  * 共享辅助函数：构建全文件的所有 def 块“禁区地图”
  */
@@ -87,10 +91,12 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
       }
 
       const seenLabels = new Set<string>();
+      const Kind = monaco.languages.CompletionItemKind;
+
       staticKeywords.forEach(kw => {
         if (!seenLabels.has(kw)) {
           seenLabels.add(kw);
-          suggestions.push({ label: kw, kind: 17, insertText: kw, filterText: kw, detail: 'ROP Keyword', range });
+          suggestions.push({ label: kw, kind: Kind.Keyword, insertText: kw, filterText: kw, detail: 'ROP Keyword', range });
         }
       });
 
@@ -103,14 +109,14 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
         if (!seenLabels.has(field)) {
           seenLabels.add(field);
           const cleanText = field.startsWith('@') ? field.slice(1) : field;
-          suggestions.push({ label: field, kind: 3, insertText: hasAtPrefix ? cleanText : field, filterText: hasAtPrefix ? cleanText : field, detail: 'Built-in Annotation', range });
+          suggestions.push({ label: field, kind: Kind.Function, insertText: hasAtPrefix ? cleanText : field, filterText: hasAtPrefix ? cleanText : field, detail: 'Built-in Annotation', range });
         }
       });
 
       foundLabels.forEach(label => {
         if (!seenLabels.has(label)) {
           seenLabels.add(label);
-          suggestions.push({ label: label, kind: 13, insertText: label, filterText: label, detail: activeDef ? 'Address Label (Local Def)' : 'Address Label (Global/Block)', range });
+          suggestions.push({ label: label, kind: Kind.Reference, insertText: label, filterText: label, detail: activeDef ? 'Address Label (Local Def)' : 'Address Label (Global/Block)', range });
         }
       });
 
@@ -120,7 +126,7 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
           if (!seenLabels.has(name)) {
             seenLabels.add(name);
             const params: string[] = meta.macro_details[name] || [];
-            suggestions.push({ label: name, kind: 11, insertText: `${name}(${params.map((p: string, i: number) => `\${${i + 1}:${p}}`).join(', ')})`, insertTextRules: 4, filterText: name, detail: `Macro Def: (${params.join(', ')})`, range });
+            suggestions.push({ label: name, kind: Kind.Method, insertText: `${name}(${params.map((p: string, i: number) => `\${${i + 1}:${p}}`).join(', ')})`, insertTextRules: 4, filterText: name, detail: `Macro Def: (${params.join(', ')})`, range });
           }
         });
       } catch (e) { console.error("补全元数据提取失败", e); }
