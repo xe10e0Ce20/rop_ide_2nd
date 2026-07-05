@@ -182,10 +182,42 @@ export default function App() {
 
     monaco.editor.setTheme('ropTheme');
 
+    const getAugmentedSourceForMetadata = (src: string): string => {
+    const lines = src.split('\n');
+    const importPattern = /^@import\s*\(\s*([a-zA-Z_]\w*)\s*\)\s*$/;
+    const libNames: string[] = [];
+
+    for (const line of lines) {
+      const match = line.trim().match(importPattern);
+      if (match) {
+        libNames.push(match[1]);
+      }
+    }
+
+    if (libNames.length === 0) return src;
+
+    // 从 globalLibsRef 获取对应库代码
+    const libCodeBlocks = libNames
+      .map(name => {
+        const lib = globalLibsRef.current.find(l => l.name === name);
+        return lib ? lib.code : '';
+      })
+      .filter(code => code.length > 0);
+
+    // 把所有库代码拼接到当前源码后面（不影响主文件的语法解析，因为 macro_def 可以出现在任何位置）
+    return src + '\n' + libCodeBlocks.join('\n');
+  };
+
+  // 创建带库支持的 metadata 回调
+  const getAutocompleteMetaWithLibs = (src: string): AutocompleteMeta => {
+    const augmentedSource = getAugmentedSourceForMetadata(src);
+    return get_autocomplete_metadata(augmentedSource) as AutocompleteMeta;
+  };
+
     // 1. 自动补全
     monaco.languages.registerCompletionItemProvider(
       ROP_LANG_ID, 
-      createRopCompletionProvider((src) => get_autocomplete_metadata(src) as AutocompleteMeta)
+      createRopCompletionProvider(getAutocompleteMetaWithLibs)
     );
 
     // 静态分析提取引擎：精准定位地址标签与其头部注释
@@ -218,7 +250,7 @@ export default function App() {
     };
 
     // 2. 增强型 Hover 悬停提示
-    const nativeHoverProvider = createRopHoverProvider((src) => get_autocomplete_metadata(src) as AutocompleteMeta);
+    const nativeHoverProvider = createRopHoverProvider(getAutocompleteMetaWithLibs);
     monaco.languages.registerHoverProvider(ROP_LANG_ID, {
       provideHover: async (model: any, position: any) => {
         const wordInfo = model.getWordAtPosition(position);
