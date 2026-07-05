@@ -29,14 +29,27 @@ export default function App() {
     localStorage.setItem(LOCAL_STORAGE_KEY, code);
   }, [code]);
 
-  // 注册 PWA 离线 Service Worker
+  // 完美解决时序问题的 Service Worker 注册逻辑
   useEffect(() => {
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
+      const registerSW = () => {
         navigator.serviceWorker.register('/sw.js')
-          .then((reg) => console.log('Service Worker 注册成功，离线就绪: ', reg.scope))
-          .catch((err) => console.error('Service Worker 注册失败: ', err));
-      });
+          .then((reg) => {
+            console.log('Service Worker 注册成功，离线就绪: ', reg.scope);
+          })
+          .catch((err) => {
+            console.error('Service Worker 注册失败: ', err);
+          });
+      };
+
+      // 如果页面已经加载完毕，直接注册；否则等待加载完再注册
+      if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        registerSW();
+      } else {
+        window.addEventListener('load', registerSW);
+      }
+    } else {
+      console.warn('当前浏览器不支持 Service Worker');
     }
   }, []);
 
