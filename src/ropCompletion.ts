@@ -40,6 +40,43 @@ function getDefIntervals(model: any): DefInterval[] {
   return defIntervals;
 }
 
+// 兼容 Map 和普通对象的参数提取
+function getMacroParams(meta: AutocompleteMeta, macroName: string): string[] {
+  if (!meta || !meta.macro_details) return [];
+  if (meta.macro_details instanceof Map) {
+    return meta.macro_details.get(macroName) || [];
+  }
+  return (meta.macro_details as Record<string, string[]>)[macroName] || [];
+}
+
+/**
+ * 从源码中提取指定宏定义前的连续注释行
+ * @returns 注释文本数组（已去除 // 前缀），未找到时返回空数组
+ */
+function extractMacroDocFromSource(source: string, macroName: string): string[] {
+  const lines = source.split('\n');
+  const defRegex = new RegExp(`\\bdef\\s+${macroName}\\b`);
+  for (let i = 0; i < lines.length; i++) {
+    if (defRegex.test(lines[i])) {
+      const docLines: string[] = [];
+      let p = i - 1;
+      while (p >= 0) {
+        const trimmed = lines[p].trim();
+        if (trimmed.startsWith('//')) {
+          docLines.unshift(trimmed.replace(/^\/\/\s*/, ''));
+          p--;
+        } else if (trimmed === '') {
+          p--;
+        } else {
+          break;
+        }
+      }
+      return docLines;
+    }
+  }
+  return [];
+}
+
 // ==================== 1. 自动补全提供者 (逻辑复用保持同步) ====================
 export function createRopCompletionProvider(getWasmMetadata: (code: string) => AutocompleteMeta) {
   return {
@@ -125,7 +162,7 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
         (meta.macro_names || []).forEach((name: string) => {
           if (!seenLabels.has(name)) {
             seenLabels.add(name);
-            const params: string[] = meta.macro_details[name] || [];
+            const params = getMacroParams(meta, name);
             suggestions.push({ label: name, kind: Kind.Method, insertText: `${name}(${params.map((p: string, i: number) => `\${${i + 1}:${p}}`).join(', ')})`, insertTextRules: 4, filterText: name, detail: `Macro Def: (${params.join(', ')})`, range });
           }
         });
@@ -197,14 +234,15 @@ export function createRopHoverProvider(getWasmMetadata: (code: string) => Autoco
       if (!wordInfo) return null;
 
       const targetWord = wordInfo.word;
+      console.log('🔍 Hover triggered on:', targetWord);
+
       const currentCode = model.getValue();
       const totalLines = model.getLineCount();
 
-      // 1. 在全文件中精确定位该宏的真正 def 定义行
+      // 1. 搜索本地 def
       let defLineNumber = -1;
       let defLineText = '';
       const defRegex = new RegExp(`\\bdef\\s+${targetWord}\\b`);
-      
       for (let i = 1; i <= totalLines; i++) {
         const lineContent = model.getLineContent(i);
         if (defRegex.test(lineContent)) {
@@ -213,23 +251,38 @@ export function createRopHoverProvider(getWasmMetadata: (code: string) => Autoco
           break;
         }
       }
+      console.log('  local def line:', defLineNumber);
 
-      // 如果连 def 定义都没找到，说明它不是宏，或者是用户正在打字的不完整标识符，直接退出
-      if (defLineNumber === -1) return null;
-
-      // 2. 提取参数列表 (优先从 WASM 拿，WASM 此时若因语法未解析完返回空，则启用正则兜底)
+      // 2. 获取 WASM 元数据
       let params: string[] = [];
+      let isImportedMacro = false;
       try {
         const meta = getWasmMetadata(currentCode);
-        if (meta && meta.macro_details && meta.macro_details[targetWord]) {
-          params = meta.macro_details[targetWord];
+        console.log('  WASM meta:', meta);
+        if (meta && meta.macro_details) {
+            const macroParams = getMacroParams(meta, targetWord);
+            // 如果参数列表非空，或者宏名字列表里有它，就认为是宏
+            if (macroParams.length > 0 || (meta.macro_names || []).includes(targetWord)) {
+                params = macroParams;
+                if (defLineNumber === -1) {
+                isImportedMacro = true;
+                }
+            }
         }
       } catch (e) {
-        console.error("Hover 实时获取 WASM 元数据失败，启动本地正则解析兜底", e);
+        console.error('  WASM metadata error:', e);
       }
 
-      // 【核心修复】：WASM 降级兜底：直接从 def 所在的行提取括号内的参数
-      if (params.length === 0) {
+      console.log('  isImportedMacro:', isImportedMacro);
+      console.log('  params:', params);
+
+      if (defLineNumber === -1 && !isImportedMacro) {
+        console.log('  => no def and not imported, return null');
+        return null;
+      }
+
+      // 3. 兜底提取参数
+      if (params.length === 0 && defLineText) {
         const paramMatch = defLineText.match(new RegExp(`\\bdef\\s+${targetWord}\\s*\\((.*?)\\)`));
         if (paramMatch && paramMatch[1]) {
           params = paramMatch[1].split(',').map(p => p.trim()).filter(p => p.length > 0);
@@ -237,34 +290,30 @@ export function createRopHoverProvider(getWasmMetadata: (code: string) => Autoco
       }
 
       const signature = `macro ${targetWord}(${params.join(', ')})`;
+      console.log('  signature:', signature);
 
-      // 3. 从精确的定义行向上扫描，抓取连续的文档注释
-      const docLines: string[] = [];
-      for (let i = defLineNumber - 1; i >= 1; i--) {
-        const lineText = model.getLineContent(i).trim();
-        if (lineText.startsWith('//')) {
-          const commentContent = lineText.replace(/^\/\/ ?/, '');
-          docLines.unshift(commentContent);
-        } else if (lineText === '') {
-          // 容错处理：允许定义头顶有一行空行，但不允许中断连续注释
-          continue;
-        } else {
-          break;
-        }
-      }
-
-      // 4. 完美组装 Markdown 气泡卡片
       const markdownContents = [
         { value: `\`\`\`rop\n${signature}\n\`\`\`` }
       ];
 
-      if (docLines.length > 0) {
-        markdownContents.push({ value: docLines.join('\n') });
+      if (defLineNumber !== -1) {
+        const docLines: string[] = [];
+        for (let i = defLineNumber - 1; i >= 1; i--) {
+          const lineText = model.getLineContent(i).trim();
+          if (lineText.startsWith('//')) {
+            docLines.unshift(lineText.replace(/^\/\/ ?/, ''));
+          } else if (lineText === '') {
+            continue;
+          } else {
+            break;
+          }
+        }
+        markdownContents.push({ value: docLines.length > 0 ? docLines.join('\n') : '*暂无文档说明*' });
       } else {
-        markdownContents.push({ value: '*暂无文档说明*' });
+        markdownContents.push({ value: '*来自导入库的宏定义*' });
       }
 
-      return {
+      const result = {
         range: {
           startLineNumber: position.lineNumber,
           startColumn: wordInfo.startColumn,
@@ -273,6 +322,8 @@ export function createRopHoverProvider(getWasmMetadata: (code: string) => Autoco
         },
         contents: markdownContents
       };
+      console.log('  returning hover:', result);
+      return result;
     }
   };
 }
