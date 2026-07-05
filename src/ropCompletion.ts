@@ -183,3 +183,90 @@ export function createRopDefinitionProvider() {
     }
   };
 }
+
+export function createRopHoverProvider(getWasmMetadata: (code: string) => AutocompleteMeta) {
+  return {
+    provideHover: (model: any, position: any) => {
+      const wordInfo = model.getWordAtPosition(position);
+      if (!wordInfo) return null;
+
+      const targetWord = wordInfo.word;
+      const currentCode = model.getValue();
+      const totalLines = model.getLineCount();
+
+      // 1. 在全文件中精确定位该宏的真正 def 定义行
+      let defLineNumber = -1;
+      let defLineText = '';
+      const defRegex = new RegExp(`\\bdef\\s+${targetWord}\\b`);
+      
+      for (let i = 1; i <= totalLines; i++) {
+        const lineContent = model.getLineContent(i);
+        if (defRegex.test(lineContent)) {
+          defLineNumber = i;
+          defLineText = lineContent;
+          break;
+        }
+      }
+
+      // 如果连 def 定义都没找到，说明它不是宏，或者是用户正在打字的不完整标识符，直接退出
+      if (defLineNumber === -1) return null;
+
+      // 2. 提取参数列表 (优先从 WASM 拿，WASM 此时若因语法未解析完返回空，则启用正则兜底)
+      let params: string[] = [];
+      try {
+        const meta = getWasmMetadata(currentCode);
+        if (meta && meta.macro_details && meta.macro_details[targetWord]) {
+          params = meta.macro_details[targetWord];
+        }
+      } catch (e) {
+        console.error("Hover 实时获取 WASM 元数据失败，启动本地正则解析兜底", e);
+      }
+
+      // 【核心修复】：WASM 降级兜底：直接从 def 所在的行提取括号内的参数
+      if (params.length === 0) {
+        const paramMatch = defLineText.match(new RegExp(`\\bdef\\s+${targetWord}\\s*\\((.*?)\\)`));
+        if (paramMatch && paramMatch[1]) {
+          params = paramMatch[1].split(',').map(p => p.trim()).filter(p => p.length > 0);
+        }
+      }
+
+      const signature = `macro ${targetWord}(${params.join(', ')})`;
+
+      // 3. 从精确的定义行向上扫描，抓取连续的文档注释
+      const docLines: string[] = [];
+      for (let i = defLineNumber - 1; i >= 1; i--) {
+        const lineText = model.getLineContent(i).trim();
+        if (lineText.startsWith('//')) {
+          const commentContent = lineText.replace(/^\/\/ ?/, '');
+          docLines.unshift(commentContent);
+        } else if (lineText === '') {
+          // 容错处理：允许定义头顶有一行空行，但不允许中断连续注释
+          continue;
+        } else {
+          break;
+        }
+      }
+
+      // 4. 完美组装 Markdown 气泡卡片
+      const markdownContents = [
+        { value: `\`\`\`rop\n${signature}\n\`\`\`` }
+      ];
+
+      if (docLines.length > 0) {
+        markdownContents.push({ value: docLines.join('\n') });
+      } else {
+        markdownContents.push({ value: '*暂无文档说明*' });
+      }
+
+      return {
+        range: {
+          startLineNumber: position.lineNumber,
+          startColumn: wordInfo.startColumn,
+          endLineNumber: position.lineNumber,
+          endColumn: wordInfo.endColumn
+        },
+        contents: markdownContents
+      };
+    }
+  };
+}

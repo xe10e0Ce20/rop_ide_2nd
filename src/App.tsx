@@ -3,7 +3,7 @@ import { useEffect, useState, useMemo } from 'react';
 import Editor from '@monaco-editor/react';
 import type { Monaco } from '@monaco-editor/react';
 import { ROP_LANG_ID, languageDef, configDef } from './ropLanguage';
-import { createRopCompletionProvider, createRopDefinitionProvider } from './ropCompletion';
+import { createRopCompletionProvider, createRopDefinitionProvider, createRopHoverProvider } from './ropCompletion';
 import type { WebCompileResult, AutocompleteMeta } from './types';
 
 import initWasm, { compile_for_web, get_autocomplete_metadata } from './wasm_pkg/rop_compiler';
@@ -81,15 +81,22 @@ export default function App() {
 
     monaco.editor.setTheme('ropTheme');
 
-    // 绑定解耦后的补全提供者
+    // 1. 自动补全
     monaco.languages.registerCompletionItemProvider(
       ROP_LANG_ID, 
       createRopCompletionProvider((src) => get_autocomplete_metadata(src) as AutocompleteMeta)
     );
 
+    // 2. 作用域隔离跳转 (Ctrl+点击)
     monaco.languages.registerDefinitionProvider(
       ROP_LANG_ID,
       createRopDefinitionProvider()
+    );
+
+    // 3. 【新增】宏悬停文档提示
+    monaco.languages.registerHoverProvider(
+      ROP_LANG_ID,
+      createRopHoverProvider((src: string) => get_autocomplete_metadata(src) as AutocompleteMeta)
     );
   };
 
