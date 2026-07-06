@@ -1,5 +1,5 @@
 // src/ropCompletion.ts
-import type { AutocompleteMeta, DefInterval } from './types';
+import type { AutocompleteMeta, DefInterval, MacroParamInfo } from './types';
 import type { languages } from 'monaco-editor';
 
 declare const monaco: {
@@ -40,13 +40,15 @@ function getDefIntervals(model: any): DefInterval[] {
   return defIntervals;
 }
 
-// 兼容 Map 和普通对象的参数提取
+// 辅助：从元数据中提取参数信息（对象数组）
+function getMacroParamsInfo(meta: AutocompleteMeta, macroName: string): MacroParamInfo[] {
+  if (!meta?.macro_details) return [];
+  return meta.macro_details[macroName] ?? [];
+}
+
+// 提取参数名数组（向后兼容）
 function getMacroParams(meta: AutocompleteMeta, macroName: string): string[] {
-  if (!meta || !meta.macro_details) return [];
-  if (meta.macro_details instanceof Map) {
-    return meta.macro_details.get(macroName) || [];
-  }
-  return (meta.macro_details as Record<string, string[]>)[macroName] || [];
+  return getMacroParamsInfo(meta, macroName).map(p => p.name);
 }
 
 /**
@@ -157,17 +159,34 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
         }
       });
 
+      // 在 provideCompletionItems 里，原来处理宏的代码块改为：
       try {
         const meta = getWasmMetadata(currentCode);
         (meta.macro_names || []).forEach((name: string) => {
-          if (!seenLabels.has(name)) {
-            seenLabels.add(name);
-            const params = getMacroParams(meta, name);
-            suggestions.push({ label: name, kind: Kind.Method, insertText: `${name}(${params.map((p: string, i: number) => `\${${i + 1}:${p}}`).join(', ')})`, insertTextRules: 4, filterText: name, detail: `Macro Def: (${params.join(', ')})`, range });
-          }
+          if (seenLabels.has(name)) return;
+          seenLabels.add(name);
+
+          const paramsInfo = getMacroParamsInfo(meta, name);
+          const paramNames = paramsInfo.map(p => p.name);
+
+          // RT 标记检测
+          const docLines = extractMacroDocFromSource(currentCode, name);
+          const isRT = docLines.length > 0 && docLines[0].startsWith('RT');
+
+          const detailParts = [`Macro Def: (${paramNames.join(', ')})`];
+          if (isRT) detailParts.push('[RT]');
+
+          suggestions.push({
+            label: name,
+            kind: Kind.Method,
+            insertText: `${name}(${paramNames.map((p, i) => `\${${i + 1}:${p}}`).join(', ')})`,
+            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet, // 4
+            filterText: name,
+            detail: detailParts.join(' '),
+            range,
+          });
         });
       } catch (e) { console.error("补全元数据提取失败", e); }
-
       return { suggestions } as any;
     }
   };
@@ -229,7 +248,7 @@ export function createRopDefinitionProvider() {
 
 export function createRopHoverProvider(
   getWasmMetadata: (code: string) => AutocompleteMeta,
-  getLibSource?: (libName: string) => string | undefined   // 新增可选参数
+  getLibSource?: (libName: string) => string | undefined
 ) {
   return {
     provideHover: (model: any, position: any) => {
@@ -238,93 +257,59 @@ export function createRopHoverProvider(
 
       const targetWord = wordInfo.word;
       const currentCode = model.getValue();
-      const totalLines = model.getLineCount();
 
-      // 1. 搜索本地 def
-      let defLineNumber = -1;
-      let defLineText = '';
-      const defRegex = new RegExp(`\\bdef\\s+${targetWord}\\b`);
-      for (let i = 1; i <= totalLines; i++) {
-        const lineContent = model.getLineContent(i);
-        if (defRegex.test(lineContent)) {
-          defLineNumber = i;
-          defLineText = lineContent;
-          break;
-        }
-      }
-
-      // 2. 获取 WASM 元数据
-      let params: string[] = [];
-      let isImportedMacro = false;
+      // 获取元数据（优先使用）
+      let paramsInfo: MacroParamInfo[] = [];
+      let isImported = false;
       try {
         const meta = getWasmMetadata(currentCode);
-        if (meta?.macro_details) {
-          // 兼容 Map 和普通对象
-          if (meta.macro_details instanceof Map) {
-            params = meta.macro_details.get(targetWord) || [];
-          } else {
-            params = (meta.macro_details as Record<string, string[]>)[targetWord] || [];
-          }
-          // 没有本地 def 但 WASM 里有 → 导入宏
-          if (defLineNumber === -1 && (params.length > 0 || (meta.macro_names || []).includes(targetWord))) {
-            isImportedMacro = true;
-          }
-        }
-      } catch (e) {
-        // 静默失败，不影响编辑体验
-      }
-
-      if (defLineNumber === -1 && !isImportedMacro) return null;
-
-      // 3. 兜底：从本地 def 行提取参数（如果有）
-      if (params.length === 0 && defLineText) {
-        const paramMatch = defLineText.match(new RegExp(`\\bdef\\s+${targetWord}\\s*\\((.*?)\\)`));
-        if (paramMatch?.[1]) {
-          params = paramMatch[1].split(',').map(p => p.trim()).filter(p => p.length > 0);
-        }
-      }
-
-      const signature = `macro ${targetWord}(${params.join(', ')})`;
-      const markdownContents = [
-        { value: `\`\`\`rop\n${signature}\n\`\`\`` }
-      ];
-
-      // 4. 提取文档注释
-      if (defLineNumber !== -1) {
-        // 本地宏：从当前编辑器模型提取
-        const docLines: string[] = [];
-        for (let i = defLineNumber - 1; i >= 1; i--) {
-          const lineText = model.getLineContent(i).trim();
-          if (lineText.startsWith('//')) {
-            docLines.unshift(lineText.replace(/^\/\/\s*/, ''));
-          } else if (lineText === '') {
-            continue;
-          } else {
-            break;
-          }
-        }
-        markdownContents.push({ value: docLines.length > 0 ? docLines.join('\n') : '*暂无文档说明*' });
-      } else if (isImportedMacro && getLibSource) {
-        // 导入宏：尝试从对应的库源码中提取注释
-        // 先找到当前文件中所有 @import 的库名
-        const importRegex = /@import\s*\(\s*([a-zA-Z_]\w*)\s*\)/g;
-        let match;
-        let docFromLib: string[] = [];
-        while ((match = importRegex.exec(currentCode)) !== null) {
-          const libName = match[1];
-          const libSource = getLibSource(libName);
-          if (libSource) {
-            const foundDoc = extractMacroDocFromSource(libSource, targetWord);
-            if (foundDoc.length > 0) {
-              docFromLib = foundDoc;
-              break;  // 找到注释即停止搜索
+        paramsInfo = getMacroParamsInfo(meta, targetWord);
+        if (paramsInfo.length > 0) {
+          // 判断是否是导入宏（本地没有 def 行）
+          const defRegex = new RegExp(`\\bdef\\s+${targetWord}\\b`);
+          let hasLocalDef = false;
+          for (let i = 1; i <= model.getLineCount(); i++) {
+            if (defRegex.test(model.getLineContent(i))) {
+              hasLocalDef = true;
+              break;
             }
           }
+          isImported = !hasLocalDef;
         }
-        markdownContents.push({ value: docFromLib.length > 0 ? docFromLib.join('\n') : '*暂无文档说明*' });
-      } else {
-        markdownContents.push({ value: '*暂无文档说明*' });
+      } catch (e) {}
+
+      if (paramsInfo.length === 0) return null;  // 无任何信息则不显示
+
+      // 构建签名参数显示
+      const paramDisplay = paramsInfo.map(p => {
+        let s = p.name;
+        if (p.type_spec) s += `:${p.type_spec}`;
+        if (p.has_default) s += ' = ...';
+        return s;
+      });
+
+      const signature = `macro ${targetWord}(${paramDisplay.join(', ')})`;
+
+      // 提取文档注释
+      let docLines: string[] = [];
+      if (!isImported) {
+        docLines = extractMacroDocFromSource(currentCode, targetWord);
+      } else if (getLibSource) {
+        const importRegex = /@import\s*\(\s*([a-zA-Z_]\w*)\s*\)/g;
+        let match;
+        while ((match = importRegex.exec(currentCode)) !== null) {
+          const libSource = getLibSource(match[1]);
+          if (libSource) {
+            const found = extractMacroDocFromSource(libSource, targetWord);
+            if (found.length > 0) { docLines = found; break; }
+          }
+        }
       }
+
+      // RT 标记
+      const isRT = docLines.length > 0 && docLines[0].startsWith('RT');
+      const docText = docLines.length > 0 ? docLines.join('\n') : '*暂无文档说明*';
+      const rtBadge = isRT ? ' 🔴 RT' : '';
 
       return {
         range: {
@@ -333,7 +318,10 @@ export function createRopHoverProvider(
           endLineNumber: position.lineNumber,
           endColumn: wordInfo.endColumn
         },
-        contents: markdownContents
+        contents: [
+          { value: `\`\`\`rop\n${signature}\n\`\`\`` },
+          { value: docText + rtBadge }
+        ]
       };
     }
   };

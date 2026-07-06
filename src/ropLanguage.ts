@@ -27,7 +27,7 @@ export const languageDef = {
             [/\b(def|block|yield)\b/, 'rop.keyword'],
 
             // 5. 地址标签定义 (如 _label: 或 gadget:) -> 必须带冒号
-            [/([a-zA-Z_]\w*)(?=:)/, 'rop.label.definition'], 
+            [/(?:^|\s)[a-zA-Z_]\w*(?=:)(?![0-9a-zA-Z])/, 'rop.label.definition'], 
 
             // 6. 带 & 的标签地址引用 (如 &_label)
             [/&[a-zA-Z_]\w*/, 'rop.label.rawrefrence'], 
