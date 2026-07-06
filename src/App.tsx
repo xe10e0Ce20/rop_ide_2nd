@@ -34,49 +34,42 @@ export default function App() {
   const [wasmReady, setWasmReady] = useState<boolean>(false);
   const [editorWidth, setEditorWidth] = useState<number>(58);
   const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
-  
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [globalLibs, setGlobalLibs] = useState<LibItem[]>([]);
   const globalLibsRef = useRef<LibItem[]>([]);
-
   const [activeViewLib, setActiveViewLib] = useState<LibItem | null>(null);
   const [currentBlock, setCurrentBlock] = useState<string | null>(null);
-  const [highlightBytes, setHighlightBytes] = useState<{ start: number; end: number } | null>(null);
+  const [highlightRanges, setHighlightRanges] = useState<{ start: number; end: number }[]>([]);
 
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<Monaco | null>(null);
 
-  // 用于在回调中获取最新值
+  // Refs for latest values (avoid closure issues)
+  const compileOutputRef = useRef<WebCompileResult | null>(null);
   const spanMapRef = useRef<Record<string, [number, number, number, number][]>>({});
   const activeBlockRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    globalLibsRef.current = globalLibs;
-  }, [globalLibs]);
+  useEffect(() => { globalLibsRef.current = globalLibs; }, [globalLibs]);
 
   const [code, setCode] = useState<string>(() => {
     const cachedData = localStorage.getItem(LOCAL_STORAGE_KEY);
     return cachedData === null || cachedData === '' ? getSampleCode() : cachedData;
   });
 
-  // 初始化同步公共库列表
   useEffect(() => {
     fetch('/api/libs')
       .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) setGlobalLibs(data);
-      })
+      .then(data => { if (Array.isArray(data)) setGlobalLibs(data); })
       .catch((err) => console.error("初始化同步公共库失败:", err));
-  }, []); 
+  }, []);
 
-  // 心跳轮询
   useEffect(() => {
     let isMounted = true;
     let timeoutId: any;
     const checkRealOnlineStatus = async () => {
       if (!navigator.onLine) { if (isMounted) setIsOnline(false); return; }
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 1000); 
+      const timer = setTimeout(() => controller.abort(), 1000);
       try {
         await fetch(`https://cloudflare.com/cdn-cgi/trace?t=${Date.now()}`, {
           method: 'GET', mode: 'cors', cache: 'no-store', signal: controller.signal
@@ -110,7 +103,6 @@ export default function App() {
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  // 核心编译计算项
   const compileOutput = useMemo<WebCompileResult | null>(() => {
     if (!wasmReady) return null;
     try {
@@ -124,40 +116,34 @@ export default function App() {
     }
   }, [code, wasmReady, globalLibs]);
 
-  // 转换 blocks
   const blocks = useMemo(() => {
     if (!compileOutput?.blocks) return {};
     return toRecord(compileOutput.blocks) as Record<string, string>;
   }, [compileOutput]);
 
-  // 转换 span_map
   const spanMapObj = useMemo(() => {
     if (!compileOutput?.span_map) return {};
     return toRecord(compileOutput.span_map) as Record<string, [number, number, number, number][]>;
   }, [compileOutput]);
 
-  // 同步 ref
-  useEffect(() => {
-    spanMapRef.current = spanMapObj;
-  }, [spanMapObj]);
+  // Update refs when values change
+  useEffect(() => { compileOutputRef.current = compileOutput; }, [compileOutput]);
+  useEffect(() => { spanMapRef.current = spanMapObj; }, [spanMapObj]);
 
-  // 当前活动的 block（用户选择或自动第一个）
   const activeBlockName = useMemo(() => {
     if (currentBlock) return currentBlock;
     const names = Object.keys(blocks);
     return names.length > 0 ? names[0] : null;
   }, [currentBlock, blocks]);
 
-  useEffect(() => {
-    activeBlockRef.current = activeBlockName;
-  }, [activeBlockName]);
+  useEffect(() => { activeBlockRef.current = activeBlockName; }, [activeBlockName]);
 
-  // 调试暴露
+  // Debug exposure
   useEffect(() => {
-    (window as any).__debug = { compileOutput, blocks, spanMapObj, activeBlockName };
-  }, [compileOutput, blocks, spanMapObj, activeBlockName]);
+    (window as any).__debug = { compileOutput, blocks, spanMapObj, activeBlockName, highlightRanges };
+  }, [compileOutput, blocks, spanMapObj, activeBlockName, highlightRanges]);
 
-  // 光标移动回调（使用 ref 获取最新值）
+  // Cursor tracking with multi-range support
   const handleCursorChange = useCallback((editor: any) => {
     const position = editor.getPosition();
     if (!position) return;
@@ -167,54 +153,49 @@ export default function App() {
 
     const block = activeBlockRef.current;
     const map = spanMapRef.current;
-    // 不检查 compileOutput，因为 map 存在即代表编译成功且有 span
     if (!block || !map[block]) {
-      setHighlightBytes(null);
+      setHighlightRanges([]);
       return;
     }
 
     const mappings = map[block];
+    const matched: { start: number; end: number }[] = [];
     for (const [srcStart, srcEnd, outStart, outEnd] of mappings) {
       if (offset >= srcStart && offset < srcEnd) {
-        setHighlightBytes({ start: outStart, end: outEnd });
-        return;
+        matched.push({ start: outStart, end: outEnd });
       }
     }
-    setHighlightBytes(null);
+    // Remove duplicates
+    const unique = matched.filter(
+      (r, i, arr) => arr.findIndex(r2 => r2.start === r.start && r2.end === r.end) === i
+    );
+    setHighlightRanges(unique);
   }, []);
 
-  // 错误波浪线同步
+  // Error markers
   useEffect(() => {
     const monaco = monacoRef.current;
     const editor = editorRef.current;
     if (!monaco || !editor) return;
-
     const model = editor.getModel();
     if (!model) return;
-
     if (!compileOutput || compileOutput.success) {
       monaco.editor.setModelMarkers(model, "rop_compiler", []);
       return;
     }
-
-    if (compileOutput.line !== undefined && compileOutput.line !== null &&
-        compileOutput.column !== undefined && compileOutput.column !== null) {
-      
+    if (compileOutput.line != null && compileOutput.column != null) {
       const errLine = compileOutput.line;
       const errCol = compileOutput.column ?? 1;
       const lineContent = model.getLineContent(errLine) || "";
       const endCol = Math.max(errCol + 1, lineContent.length + 1);
-
-      monaco.editor.setModelMarkers(model, "rop_compiler", [
-        {
-          startLineNumber: errLine,
-          startColumn: errCol,
-          endLineNumber: errLine,
-          endColumn: endCol,
-          message: compileOutput.error_message || "编译语义错误",
-          severity: monaco.MarkerSeverity.Error,
-        },
-      ]);
+      monaco.editor.setModelMarkers(model, "rop_compiler", [{
+        startLineNumber: errLine,
+        startColumn: errCol,
+        endLineNumber: errLine,
+        endColumn: endCol,
+        message: compileOutput.error_message || "编译语义错误",
+        severity: monaco.MarkerSeverity.Error,
+      }]);
     } else {
       monaco.editor.setModelMarkers(model, "rop_compiler", []);
     }
@@ -224,50 +205,39 @@ export default function App() {
     monaco.languages.register({ id: ROP_LANG_ID });
     monaco.languages.setMonarchTokensProvider(ROP_LANG_ID, languageDef as any);
     monaco.languages.setLanguageConfiguration(ROP_LANG_ID, configDef as any);
-
     monaco.editor.defineTheme('ropTheme', {
-      base: 'vs-dark', 
-      inherit: true,   
+      base: 'vs-dark',
+      inherit: true,
       rules: [
-          { token: 'rop.keyword', foreground: '#C586C0', fontStyle: 'bold' },
-          { token: 'rop.directive', foreground: '#CE9178' },
-          { token: 'rop.label.definition', foreground: '#D9662C', fontStyle: 'bold' },
-          { token: 'rop.label.reference', foreground: '#4FC1FF' },
-          { token: 'rop.label.rawrefrence', foreground: '#8BE9FD' },
-          { token: 'rop.macro.call', foreground: '#DCDCAA' },
-          { token: 'rop.bytecode', foreground: '#B5CEA8' },
-          { token: 'rop.hex', foreground: '#0CD4AF' },
-          { token: 'rop.comment', foreground: '#6A9955', fontStyle: 'italic' }
+        { token: 'rop.keyword', foreground: '#C586C0', fontStyle: 'bold' },
+        { token: 'rop.directive', foreground: '#CE9178' },
+        { token: 'rop.label.definition', foreground: '#D9662C', fontStyle: 'bold' },
+        { token: 'rop.label.reference', foreground: '#4FC1FF' },
+        { token: 'rop.label.rawrefrence', foreground: '#8BE9FD' },
+        { token: 'rop.macro.call', foreground: '#DCDCAA' },
+        { token: 'rop.bytecode', foreground: '#B5CEA8' },
+        { token: 'rop.hex', foreground: '#0CD4AF' },
+        { token: 'rop.comment', foreground: '#6A9955', fontStyle: 'italic' }
       ],
-      colors: {
-          'editor.background': '#151515', 
-          'editor.foreground': '#D4D4D4'
-      }
+      colors: { 'editor.background': '#151515', 'editor.foreground': '#D4D4D4' }
     });
-
     monaco.editor.setTheme('ropTheme');
 
     const getAugmentedSourceForMetadata = (src: string): string => {
       const lines = src.split('\n');
       const importPattern = /^@import\s*\(\s*([a-zA-Z_]\w*)\s*\)\s*$/;
       const libNames: string[] = [];
-
       for (const line of lines) {
         const match = line.trim().match(importPattern);
-        if (match) {
-          libNames.push(match[1]);
-        }
+        if (match) libNames.push(match[1]);
       }
-
       if (libNames.length === 0) return src;
-
       const libCodeBlocks = libNames
         .map(name => {
           const lib = globalLibsRef.current.find(l => l.name === name);
           return lib ? lib.code : '';
         })
         .filter(code => code.length > 0);
-
       return src + '\n' + libCodeBlocks.join('\n');
     };
 
@@ -276,16 +246,14 @@ export default function App() {
       return get_autocomplete_metadata(augmentedSource) as AutocompleteMeta;
     };
 
-    // 1. 自动补全
     monaco.languages.registerCompletionItemProvider(
-      ROP_LANG_ID, 
+      ROP_LANG_ID,
       createRopCompletionProvider(getAutocompleteMetaWithLibs)
     );
 
     const getLabelDefinition = (word: string, codeText: string) => {
       const lines = codeText.split('\n');
       const labelDefRegex = new RegExp(`^\\s*(${word})\\s*:`);
-      
       for (let i = 0; i < lines.length; i++) {
         if (labelDefRegex.test(lines[i])) {
           const commentLines: string[] = [];
@@ -296,21 +264,17 @@ export default function App() {
               commentLines.unshift(trimmed.replace(/^\/\/+/, '').trim());
               p--;
             } else if (trimmed === '') {
-              p--; 
+              p--;
             } else {
               break;
             }
           }
-          return {
-            line: i + 1,
-            comment: commentLines.join('\n')
-          };
+          return { line: i + 1, comment: commentLines.join('\n') };
         }
       }
       return null;
     };
 
-    // 2. 增强型 Hover 悬停提示
     const nativeHoverProvider = createRopHoverProvider(
       getAutocompleteMetaWithLibs,
       (libName: string) => globalLibsRef.current.find(l => l.name === libName)?.code
@@ -319,37 +283,25 @@ export default function App() {
       provideHover: async (model: any, position: any) => {
         const wordInfo = model.getWordAtPosition(position);
         if (!wordInfo) return null;
-
         const nativeResult = await Promise.resolve(nativeHoverProvider.provideHover(model, position));
-        if (nativeResult) {
-          return nativeResult; 
-        }
-
+        if (nativeResult) return nativeResult;
         const labelInfo = getLabelDefinition(wordInfo.word, model.getValue());
         if (labelInfo) {
           return {
-            contents: [
-              { value: labelInfo.comment ? labelInfo.comment : `*地址标签 \`${wordInfo.word}\` 定位于第 ${labelInfo.line} 行*` }
-            ]
+            contents: [{ value: labelInfo.comment ? labelInfo.comment : `*地址标签 \`${wordInfo.word}\` 定位于第 ${labelInfo.line} 行*` }]
           };
         }
-
         return null;
       }
     });
 
-    // 3. 增强型 Definition Provider (Ctrl+点击跳转)
     const nativeDefinitionProvider = createRopDefinitionProvider();
     monaco.languages.registerDefinitionProvider(ROP_LANG_ID, {
       provideDefinition: async (model: any, position: any) => {
         const wordInfo = model.getWordAtPosition(position);
         if (!wordInfo) return null;
-
         const nativeDef = await Promise.resolve(nativeDefinitionProvider.provideDefinition(model, position));
-        if (nativeDef) {
-          return nativeDef;
-        }
-
+        if (nativeDef) return nativeDef;
         const labelInfo = getLabelDefinition(wordInfo.word, model.getValue());
         if (labelInfo) {
           return {
@@ -362,13 +314,11 @@ export default function App() {
             }
           };
         }
-
         return null;
       }
     });
   };
 
-  // 捕获编辑器与 monaco 的原生实例
   const handleEditorDidMount = (editor: any, monaco: Monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
@@ -376,14 +326,12 @@ export default function App() {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#121212', color: '#e0e0e0', position: 'fixed', top: 0, left: 0}}>
-      {/* 顶部状态栏 */}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#121212', color: '#e0e0e0', position: 'fixed', top: 0, left: 0 }}>
       <div style={{ padding: '12px 24px', background: '#1a1a1a', borderBottom: '1px solid #2d2d2d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
           <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#00ffb3' }}>ROP IDE 2nd</h2>
           <span style={{ fontSize: '12px', color: '#666', fontFamily: "'JetBrains Mono', monospace", fontWeight: 'bold' }}>v{pkg.version}</span>
-          
-          <button 
+          <button
             type="button"
             onClick={() => setIsModalOpen(true)}
             style={{ background: '#222', border: '1px solid #333', color: '#00ffb3', padding: '4px 12px', fontSize: '12px', fontFamily: "'JetBrains Mono', monospace", borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', transition: 'all 0.2s' }}
@@ -393,7 +341,6 @@ export default function App() {
             📦 Global Library
           </button>
         </div>
-
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#111', padding: '4px 12px', borderRadius: '20px', border: '1px solid #222' }}>
           <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isOnline ? '#00ffb3' : '#ff5555', boxShadow: isOnline ? '0 0 8px #00ffb3' : '0 0 8px #ff5555' }} />
           <span style={{ fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", color: isOnline ? '#aaa' : '#ff8888' }}>
@@ -402,24 +349,22 @@ export default function App() {
         </div>
       </div>
 
-      {/* 主工作区 */}
       <div style={{ display: 'flex', flex: 1, width: '100%', overflow: 'hidden' }}>
         <div style={{ width: `${editorWidth}%`, height: '100%' }}>
           <Editor
-            height="100%" 
-            theme="ropTheme" 
-            language={ROP_LANG_ID} 
+            height="100%"
+            theme="ropTheme"
+            language={ROP_LANG_ID}
             value={code}
             onChange={(val) => setCode(val ?? '')}
             beforeMount={handleEditorWillMount}
             onMount={handleEditorDidMount}
-            options={{ 
+            options={{
               fontSize: 14, minimap: { enabled: false }, fontFamily: "'JetBrains Mono', monospace",
               automaticLayout: true, lineNumbersMinChars: 4
             }}
           />
         </div>
-
         <div onMouseDown={handleMouseDown} style={{ width: '6px', background: '#222', cursor: 'col-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
           <div style={{ width: '2px', height: '30px', background: '#444' }} />
         </div>
@@ -433,8 +378,8 @@ export default function App() {
                   <span style={{ color: '#00ffb3', fontWeight: 'bold' }}>@{activeViewLib.name}</span>
                   <span style={{ color: '#444', marginLeft: '10px' }}>by {activeViewLib.author}</span>
                 </div>
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   onClick={() => setActiveViewLib(null)}
                   style={{ background: '#222', border: '1px solid #444', color: '#ff5555', padding: '2px 8px', fontSize: '11px', cursor: 'pointer', fontFamily: "'JetBrains Mono', monospace", borderRadius: '4px' }}
                 >
@@ -444,7 +389,7 @@ export default function App() {
               <div style={{ flex: 1, width: '100%' }}>
                 <Editor
                   height="100%" theme="ropTheme" language={ROP_LANG_ID} value={activeViewLib.code}
-                  options={{ 
+                  options={{
                     fontSize: 13, minimap: { enabled: false }, readOnly: true,
                     fontFamily: "'JetBrains Mono', monospace", automaticLayout: true,
                     domReadOnly: true
@@ -457,11 +402,11 @@ export default function App() {
               <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#666', letterSpacing: '1px', textTransform: 'uppercase', borderBottom: '1px solid #222', paddingBottom: '8px', marginBottom: '16px' }}>
                 Console & Binary Stream
               </div>
-              
+
               {compileOutput && !compileOutput.success && (
                 <div style={{ background: '#140c0c', border: '1px solid #5a2323', borderRadius: '6px', overflow: 'hidden' }}>
                   <div style={{ background: '#2c1616', padding: '6px 14px', fontSize: '12px', color: '#ff8888', fontWeight: 'bold' }}>⚠️ COMPILATION_FAILED</div>
-                  <pre style={{ margin: 0, padding: '16px', fontSize: '13px', lineHeight: '1.6', color: '#f8f8f2', whiteSpace: 'pre-wrap', textAlign: 'left',fontFamily: '"Consolas", "Microsoft YaHei", sans-serif'}}>
+                  <pre style={{ margin: 0, padding: '16px', fontSize: '13px', lineHeight: '1.6', color: '#f8f8f2', whiteSpace: 'pre-wrap', textAlign: 'left',fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Hiragino Sans GB", "Microsoft YaHei", sans-serif'}}>
                     {compileOutput.error_message}
                   </pre>
                 </div>
@@ -479,13 +424,10 @@ export default function App() {
                       const hexStr = blocks[blockName];
                       const bytes = hexStr.match(/.{1,2}/g) || [];
                       const isActive = activeBlockName === blockName;
-                      const hlStart = isActive && highlightBytes ? highlightBytes.start : -1;
-                      const hlEnd = isActive && highlightBytes ? highlightBytes.end : -1;
+                      const ranges = isActive ? highlightRanges : [];
 
                       const rows: string[][] = [];
-                      for (let i = 0; i < bytes.length; i += 16) {
-                        rows.push(bytes.slice(i, i + 16));
-                      }
+                      for (let i = 0; i < bytes.length; i += 16) rows.push(bytes.slice(i, i + 16));
 
                       return (
                         <div key={blockName} style={{ background: '#111', borderRadius: '6px', border: '1px solid #262626', overflow: 'hidden' }}>
@@ -508,7 +450,7 @@ export default function App() {
                                 <span style={{ display: 'flex', gap: '4px' }}>
                                   {row.map((byteHex, byteIdx) => {
                                     const byteOffset = rowIdx * 16 + byteIdx;
-                                    const isHighlighted = byteOffset >= hlStart && byteOffset < hlEnd;
+                                    const isHighlighted = ranges.some(r => byteOffset >= r.start && byteOffset < r.end);
                                     return (
                                       <span
                                         key={byteIdx}
