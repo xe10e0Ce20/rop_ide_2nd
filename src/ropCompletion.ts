@@ -13,7 +13,6 @@ export function getDefIntervals(model: any): DefInterval[] {
   for (let i = 1; i <= totalLines; i++) {
     const line = model.getLineContent(i);
     if (defStartRegex.test(line)) {
-      // 寻找第一个 {
       let braceLine = i;
       let foundBrace = false;
       while (braceLine <= totalLines) {
@@ -46,6 +45,7 @@ export function getDefIntervals(model: any): DefInterval[] {
   }
   return intervals;
 }
+
 
 // 从元数据中获取参数名（字符串数组）
 function getMacroParamNames(meta: AutocompleteMeta, macroName: string): string[] {
@@ -125,12 +125,8 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
           if (!foundLabels.includes(match[1])) foundLabels.push(match[1]);
         }
       } else {
+        // 构建全局内容（排除 def 内部）
         let cleanGlobalContent = '';
-        const blockNameRegex = /\bblock\s+([a-zA-Z_]\w*)\s*\{/g;
-        let blockMatch;
-        while ((blockMatch = blockNameRegex.exec(cleanGlobalContent)) !== null) {
-          if (!foundLabels.includes(blockMatch[1])) foundLabels.push(blockMatch[1]);
-        }
         const totalLines = model.getLineCount();
         for (let i = 1; i <= totalLines; i++) {
           const isInsideAnyDef = defIntervals.some(interval => i >= interval.start && i <= interval.end);
@@ -138,6 +134,13 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
             cleanGlobalContent += model.getLineContent(i) + '\n';
           }
         }
+        // 提取 block 名称作为标签
+        const blockNameRegex = /\bblock\s+([a-zA-Z_]\w*)\s*\{/g;
+        let blockMatch;
+        while ((blockMatch = blockNameRegex.exec(cleanGlobalContent)) !== null) {
+          if (!foundLabels.includes(blockMatch[1])) foundLabels.push(blockMatch[1]);
+        }
+        // 提取普通标签
         const labelRegex = /\b([a-zA-Z_]\w*):/g;
         let match;
         while ((match = labelRegex.exec(cleanGlobalContent)) !== null) {
@@ -204,6 +207,8 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
     }
   };
 }
+
+// 后面的 createRopDefinitionProvider 和 createRopHoverProvider 保持不变
 
 // ==================== 2. 定义跳转提供者 ====================
 export function createRopDefinitionProvider() {

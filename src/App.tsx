@@ -193,39 +193,42 @@ export default function App() {
 
   // Cursor tracking with multi-range support
   const handleCursorChange = useCallback((editor: any) => {
-    const position = editor.getPosition();
-    if (!position) return;
-    const model = editor.getModel();
-    if (!model) return;
-    const offset = model.getOffsetAt(position);
-    const line = position.lineNumber;
+  const position = editor.getPosition();
+  if (!position) return;
+  const model = editor.getModel();
+  if (!model) return;
+  const offset = model.getOffsetAt(position);
+  const line = position.lineNumber;
 
-    // 根据光标行号确定当前所在的 block
-    const currentBlock = blockIntervals.find(interval => line >= interval.start && line <= interval.end)?.name || null;
-    setActiveBlockByCursor(currentBlock);
+  const currentBlock = blockIntervals.find(interval => line >= interval.start && line <= interval.end)?.name || null;
+  setActiveBlockByCursor(currentBlock);
 
-    const block = currentBlock;
-    const map = spanMapRef.current;
-    
-    if (!block || !map[block]) {
-      setHighlightRanges([]);
-      return;
+  const block = currentBlock;
+  const map = spanMapRef.current;
+
+  if (!block || !map[block]) {
+    setHighlightRanges([]);
+    return;
+  }
+
+  const mappings = map[block];
+  const matched: { start: number; end: number }[] = [];
+  for (const [srcStart, srcEnd, outStart, outEnd] of mappings) {
+    if (offset >= srcStart && offset < srcEnd) {
+      matched.push({ start: outStart, end: outEnd });
     }
+  }
 
-    const mappings = map[block];
-    const matched: { start: number; end: number }[] = [];
-    for (const [srcStart, srcEnd, outStart, outEnd] of mappings) {
-      if (offset >= srcStart && offset < srcEnd) {
-        matched.push({ start: outStart, end: outEnd });
-      }
+  // 选择最精确的范围（输出字节数最小的那个）
+  let best: { start: number; end: number } | null = null;
+  for (const m of matched) {
+    if (!best || (m.end - m.start) < (best.end - best.start)) {
+      best = m;
     }
-    
-    // Remove duplicates
-    const unique = matched.filter(
-      (r, i, arr) => arr.findIndex(r2 => r2.start === r.start && r2.end === r.end) === i
-    );
-    setHighlightRanges(unique);
-  }, [blockIntervals]);
+  }
+
+  setHighlightRanges(best ? [best] : []);
+}, [blockIntervals]);
 
   // Error markers
   useEffect(() => {
@@ -465,6 +468,12 @@ export default function App() {
     editorRef.current = editor;
     monacoRef.current = monaco;
     editor.onDidChangeCursorPosition(() => handleCursorChange(editor));
+
+    (window as any).__debug_editor = editor;
+    (window as any).__debug = { 
+      ...(window as any).__debug || {},
+      get editor() { return editor; }
+    };
   };
 
   return (
