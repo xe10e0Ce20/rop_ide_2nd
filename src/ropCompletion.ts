@@ -6,35 +6,45 @@ declare const monaco: {
     languages: typeof languages;
 };
 
-function getDefIntervals(model: any): DefInterval[] {
+export function getDefIntervals(model: any): DefInterval[] {
   const totalLines = model.getLineCount();
-  const defRegex = /\bdef\s+[a-zA-Z_]\w*\s*\(.*?\)\s*\{/;
-  const defIntervals: DefInterval[] = [];
-
+  const intervals: DefInterval[] = [];
+  const defStartRegex = /\bdef\s+[a-zA-Z_]\w*\b/;
   for (let i = 1; i <= totalLines; i++) {
-    const lineContent = model.getLineContent(i);
-    if (defRegex.test(lineContent)) {
-      let braceCount = 0;
-      let defEndLine = -1;
-      for (let j = i; j <= totalLines; j++) {
-        const subContent = model.getLineContent(j);
-        const openBraces = (subContent.match(/\{/g) || []).length;
-        const closeBraces = (subContent.match(/\}/g) || []).length;
-        if (j === i) braceCount = openBraces;
-        else braceCount += openBraces - closeBraces;
+    const line = model.getLineContent(i);
+    if (defStartRegex.test(line)) {
+      // 寻找第一个 {
+      let braceLine = i;
+      let foundBrace = false;
+      while (braceLine <= totalLines) {
+        if (model.getLineContent(braceLine).indexOf('{') !== -1) {
+          foundBrace = true;
+          break;
+        }
+        braceLine++;
+      }
+      if (!foundBrace) continue;
 
-        if (braceCount === 0) {
-          defEndLine = j;
+      let braceCount = 0;
+      let endLine = -1;
+      for (let j = braceLine; j <= totalLines; j++) {
+        const sub = model.getLineContent(j);
+        const open = (sub.match(/\{/g) || []).length;
+        const close = (sub.match(/\}/g) || []).length;
+        if (j === braceLine) braceCount = open;
+        else braceCount += open - close;
+        if (braceCount <= 0) {
+          endLine = j;
           break;
         }
       }
-      if (defEndLine !== -1) {
-        defIntervals.push({ start: i, end: defEndLine });
-        i = defEndLine;
+      if (endLine !== -1) {
+        intervals.push({ start: i, end: endLine });
+        i = endLine;
       }
     }
   }
-  return defIntervals;
+  return intervals;
 }
 
 // 从元数据中获取参数名（字符串数组）
@@ -116,6 +126,11 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
         }
       } else {
         let cleanGlobalContent = '';
+        const blockNameRegex = /\bblock\s+([a-zA-Z_]\w*)\s*\{/g;
+        let blockMatch;
+        while ((blockMatch = blockNameRegex.exec(cleanGlobalContent)) !== null) {
+          if (!foundLabels.includes(blockMatch[1])) foundLabels.push(blockMatch[1]);
+        }
         const totalLines = model.getLineCount();
         for (let i = 1; i <= totalLines; i++) {
           const isInsideAnyDef = defIntervals.some(interval => i >= interval.start && i <= interval.end);
@@ -270,7 +285,9 @@ export function createRopHoverProvider(
           }
           isImported = !hasLocal;
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error("悬停元数据提取失败", e);
+      }
 
       // 2. 查找本地 def 行（回退参数和文档）
       let defLineNumber = -1;
