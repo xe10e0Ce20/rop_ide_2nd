@@ -5,6 +5,8 @@ import { ROP_LANG_ID, languageDef, configDef } from './ropLanguage';
 import { createRopCompletionProvider, createRopHoverProvider, createRopDefinitionProvider } from './ropCompletion';
 import type { WebCompileResult, AutocompleteMeta } from './types';
 import RopLibraryModal from './components/RopLibraryModal';
+import { getAllVFSLibs, saveVFSLib, deleteVFSLib } from './utils/vfs';
+import type { ManagedLib, LibVersion } from './utils/vfs';
 
 import initWasm, { compile_for_web, get_autocomplete_metadata } from './wasm_pkg/rop_compiler';
 import pkg from '../package.json';
@@ -34,43 +36,54 @@ export default function App() {
   const [wasmReady, setWasmReady] = useState<boolean>(false);
   const [editorWidth, setEditorWidth] = useState<number>(58);
   const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
-  const [globalLibs, setGlobalLibs] = useState<LibItem[]>([]);
-  const globalLibsRef = useRef<LibItem[]>([]);
+  const [vfsLibs, setVfsLibs] = useState<ManagedLib[]>([]);
+  const vfsLibsRef = useRef<ManagedLib[]>([]);
 
-  const [activeViewLib, setActiveViewLib] = useState<LibItem | null>(null);
-
-  // 移除 currentBlock 状态，改用光标位置自动判断
+  const [activeViewLib, setActiveViewLib] = useState<ManagedLib | null>(null);
   const [activeBlockByCursor, setActiveBlockByCursor] = useState<string | null>(null);
   const [highlightRanges, setHighlightRanges] = useState<{ start: number; end: number }[]>([]);
 
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<Monaco | null>(null);
 
-  // Refs for latest values (avoid closure issues)
   const compileOutputRef = useRef<WebCompileResult | null>(null);
   const spanMapRef = useRef<Record<string, [number, number, number, number][]>>({});
   const activeBlockRef = useRef<string | null>(null);
 
   useEffect(() => {
-    globalLibsRef.current = globalLibs;
-  }, [globalLibs]);
+    vfsLibsRef.current = vfsLibs;
+  }, [vfsLibs]);
 
   const [code, setCode] = useState<string>(() => {
     const cachedData = localStorage.getItem(LOCAL_STORAGE_KEY);
     return cachedData === null || cachedData === '' ? getSampleCode() : cachedData;
   });
 
-  // 初始化同步公共库列表
-  useEffect(() => {
-    fetch('/api/libs')
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) setGlobalLibs(data);
-      })
-      .catch((err) => console.error("初始化同步公共库失败:", err));
+  const refreshVFS = useCallback(async (isManual = false) => {
+    if (isManual) setIsRefreshing(true);
+    try {
+      const libs = await getAllVFSLibs();
+      setVfsLibs(libs);
+    } catch (err) {
+      console.error("读取本地 VFS 失败:", err);
+    } finally {
+      if (isManual) {
+        setTimeout(() => setIsRefreshing(false), 300);
+      }
+    }
   }, []);
+
+  useEffect(() => {
+    // 使用 setTimeout 剥离出当前的同步调用栈
+    const timer = setTimeout(() => {
+      refreshVFS(false);
+    }, 0);
+    
+    return () => clearTimeout(timer);
+  }, [refreshVFS]);
 
   // 心跳轮询
   useEffect(() => {
@@ -113,18 +126,23 @@ export default function App() {
     window.addEventListener('mouseup', onMouseUp);
   };
 
+  // WASM 编译器接入：处理无 @ 前缀的纯库名依赖加载
   const compileOutput = useMemo<WebCompileResult | null>(() => {
     if (!wasmReady) return null;
     try {
-      return compile_for_web(code, (libName: string) => {
-        const targetLib = globalLibs.find(l => l.name === libName);
-        return targetLib ? targetLib.code : "";
+      return compile_for_web(code, (importString: string) => {
+        // 去掉可能存在的版本后缀，统一根据锁定版本策略加载
+        const [libName, requestedVersion] = importString.split('@');
+        const targetLib = vfsLibs.find(l => l.name === libName);
+        if (!targetLib) return "";
+        const versionToFetch = requestedVersion || targetLib.activeVersion;
+        return targetLib.versions[versionToFetch]?.code || "";
       }) as WebCompileResult;
     } catch (e) {
       console.error(e);
-      return { success: false, error_message: "WASM 执行崩溃", blocks: {} };
+      return { success: false, error_message: "WASM 执行崩溃" + e, blocks: {} };
     }
-  }, [code, wasmReady, globalLibs]);
+  }, [code, wasmReady, vfsLibs]);
 
   const blocks = useMemo(() => {
     if (!compileOutput?.blocks) return {};
@@ -136,101 +154,89 @@ export default function App() {
     return toRecord(compileOutput.span_map) as Record<string, [number, number, number, number][]>;
   }, [compileOutput]);
 
-  // Update refs when values change
   useEffect(() => { compileOutputRef.current = compileOutput; }, [compileOutput]);
   useEffect(() => { spanMapRef.current = spanMapObj; }, [spanMapObj]);
 
-  // 计算所有 block 的行范围（用于判断光标在哪个 block 内）
+  // 计算所有 block 的行范围
   const blockIntervals = useMemo(() => {
     const intervals: { name: string; start: number; end: number }[] = [];
     const lines = code.split('\n');
     const blockStartRegex = /\bblock\s+([a-zA-Z_]\w*)\s*\{/;
-    
     for (let i = 0; i < lines.length; i++) {
       const match = lines[i].match(blockStartRegex);
       if (match) {
         const name = match[1];
         let braceCount = 0;
-        let endLine = lines.length; // 默认为最后一行
-        
+        let endLine = lines.length;
         for (let j = i; j < lines.length; j++) {
           const line = lines[j];
           const openBraces = (line.match(/\{/g) || []).length;
           const closeBraces = (line.match(/\}/g) || []).length;
-          
           if (j === i) {
             braceCount = openBraces;
           } else {
             braceCount += openBraces - closeBraces;
           }
-          
           if (braceCount === 0) {
             endLine = j + 1; // 行号从1开始
             break;
           }
         }
-        
         intervals.push({ name, start: i + 1, end: endLine });
       }
     }
     return intervals;
   }, [code]);
 
-  // 根据光标位置自动选择活动的 block
   const activeBlockName = useMemo(() => {
     if (activeBlockByCursor) return activeBlockByCursor;
-    // 如果光标不在任何 block 内，默认返回第一个 block
     const names = Object.keys(blocks);
     return names.length > 0 ? names[0] : null;
   }, [activeBlockByCursor, blocks]);
 
   useEffect(() => { activeBlockRef.current = activeBlockName; }, [activeBlockName]);
 
-  // Debug exposure
   useEffect(() => {
     (window as any).__debug = { compileOutput, blocks, spanMapObj, activeBlockName, highlightRanges, blockIntervals };
   }, [compileOutput, blocks, spanMapObj, activeBlockName, highlightRanges, blockIntervals]);
 
-  // Cursor tracking with multi-range support
+  // 光标追踪，多范围高亮
   const handleCursorChange = useCallback((editor: any) => {
-  const position = editor.getPosition();
-  if (!position) return;
-  const model = editor.getModel();
-  if (!model) return;
-  const offset = model.getOffsetAt(position);
-  const line = position.lineNumber;
+    const position = editor.getPosition();
+    if (!position) return;
+    const model = editor.getModel();
+    if (!model) return;
+    const offset = model.getOffsetAt(position);
+    const line = position.lineNumber;
 
-  const currentBlock = blockIntervals.find(interval => line >= interval.start && line <= interval.end)?.name || null;
-  setActiveBlockByCursor(currentBlock);
+    const currentBlock = blockIntervals.find(interval => line >= interval.start && line <= interval.end)?.name || null;
+    setActiveBlockByCursor(currentBlock);
 
-  const block = currentBlock;
-  const map = spanMapRef.current;
-
-  if (!block || !map[block]) {
-    setHighlightRanges([]);
-    return;
-  }
-
-  const mappings = map[block];
-  const matched: { start: number; end: number }[] = [];
-  for (const [srcStart, srcEnd, outStart, outEnd] of mappings) {
-    if (offset >= srcStart && offset < srcEnd) {
-      matched.push({ start: outStart, end: outEnd });
+    const block = currentBlock;
+    const map = spanMapRef.current;
+    if (!block || !map[block]) {
+      setHighlightRanges([]);
+      return;
     }
-  }
 
-  // 选择最精确的范围（输出字节数最小的那个）
-  let best: { start: number; end: number } | null = null;
-  for (const m of matched) {
-    if (!best || (m.end - m.start) < (best.end - best.start)) {
-      best = m;
+    const mappings = map[block];
+    const matched: { start: number; end: number }[] = [];
+    for (const [srcStart, srcEnd, outStart, outEnd] of mappings) {
+      if (offset >= srcStart && offset < srcEnd) {
+        matched.push({ start: outStart, end: outEnd });
+      }
     }
-  }
 
-  setHighlightRanges(best ? [best] : []);
-}, [blockIntervals]);
+    let best: { start: number; end: number } | null = null;
+    for (const m of matched) {
+      if (!best || (m.end - m.start) < (best.end - best.start)) {
+        best = m;
+      }
+    }
+    setHighlightRanges(best ? [best] : []);
+  }, [blockIntervals]);
 
-  // Error markers
+  // 错误波浪线
   useEffect(() => {
     const monaco = monacoRef.current;
     const editor = editorRef.current;
@@ -249,7 +255,6 @@ export default function App() {
       const errCol = compileOutput.column ?? 1;
       const lineContent = model.getLineContent(errLine) || "";
       const endCol = Math.max(errCol + 1, lineContent.length + 1);
-
       monaco.editor.setModelMarkers(model, "rop_compiler", [
         {
           startLineNumber: errLine,
@@ -289,31 +294,26 @@ export default function App() {
         'editor.foreground': '#D4D4D4'
       }
     });
-
     monaco.editor.setTheme('ropTheme');
 
+    // 获取增强源码（匹配标准 `@import(std_io)` 去掉 @ 前缀库查找逻辑）
     const getAugmentedSourceForMetadata = (src: string): string => {
       const lines = src.split('\n');
-      const importPattern = /^@import\s*\(\s*([a-zA-Z_]\w*)\s*\)\s*$/;
-      const libNames: string[] = [];
-
+      const importPattern = /^@import\s*\(\s*([a-zA-Z_]\w*)(?:@([\w.]+))?\s*\)\s*$/;
+      let augmented = src;
       for (const line of lines) {
         const match = line.trim().match(importPattern);
         if (match) {
-          libNames.push(match[1]);
+          const libName = match[1];
+          const versionTag = match[2];
+          const lib = vfsLibsRef.current.find(l => l.name === libName);
+          if (lib) {
+            const codeText = lib.versions[versionTag || lib.activeVersion]?.code || '';
+            augmented += '\n' + codeText;
+          }
         }
       }
-
-      if (libNames.length === 0) return src;
-
-      const libCodeBlocks = libNames
-        .map(name => {
-          const lib = globalLibsRef.current.find(l => l.name === name);
-          return lib ? lib.code : '';
-        })
-        .filter(code => code.length > 0);
-
-      return src + '\n' + libCodeBlocks.join('\n');
+      return augmented;
     };
 
     const getAutocompleteMetaWithLibs = (src: string): AutocompleteMeta => {
@@ -321,62 +321,24 @@ export default function App() {
       return get_autocomplete_metadata(augmentedSource) as AutocompleteMeta;
     };
 
-    // 1. 自动补全
+    // 自动补全
     monaco.languages.registerCompletionItemProvider(
       ROP_LANG_ID,
       createRopCompletionProvider(getAutocompleteMetaWithLibs)
     );
-
-    // 标签定义查找
-    const getLabelDefinition = (word: string, codeText: string, currentLine: number) => {
-      const lines = codeText.split('\n');
-      const defIntervals = getDefIntervals(codeText);
-      const activeDef = defIntervals.find(interval => currentLine >= interval.start && currentLine <= interval.end);
-      
-      const startLine = activeDef ? activeDef.start : 1;
-      const endLine = activeDef ? activeDef.end : lines.length;
-      
-      const labelDefRegex = new RegExp(`^\\s*(${word})\\s*:`);
-      
-      for (let i = startLine; i <= endLine; i++) {
-        const line = lines[i - 1] || '';
-        if (labelDefRegex.test(line)) {
-          const commentLines: string[] = [];
-          let p = i - 1;
-          while (p >= startLine) {
-            const trimmed = (lines[p - 1] || '').trim();
-            if (trimmed.startsWith('//')) {
-              commentLines.unshift(trimmed.replace(/^\/\/+/, '').trim());
-              p--;
-            } else if (trimmed === '') {
-              p--;
-            } else {
-              break;
-            }
-          }
-          return {
-            line: i,
-            comment: commentLines.join('\n')
-          };
-        }
-      }
-      return null;
-    };
 
     // 辅助函数：获取 def 区间
     function getDefIntervals(codeText: string): Array<{ start: number; end: number }> {
       const lines = codeText.split('\n');
       const intervals: Array<{ start: number; end: number }> = [];
       const defStartRegex = /\bdef\s+[a-zA-Z_]\w*\b/;
-      
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (defStartRegex.test(line)) {
-          // 寻找第一个 {
           let braceLine = i;
           let foundBrace = false;
           while (braceLine < lines.length) {
-            if (lines[braceLine].indexOf('{') !== -1) {
+            if (lines[braceLine].includes('{')) {
               foundBrace = true;
               break;
             }
@@ -399,17 +361,51 @@ export default function App() {
           }
           if (endLine !== -1) {
             intervals.push({ start: i + 1, end: endLine });
-            i = endLine - 1; // 跳过已处理的区间
+            i = endLine - 1;
           }
         }
       }
       return intervals;
     }
 
-    // 2. 悬停提示
+    // 标签定义查找
+    const getLabelDefinition = (word: string, codeText: string, currentLine: number) => {
+      const lines = codeText.split('\n');
+      const defIntervals = getDefIntervals(codeText);
+      const activeDef = defIntervals.find(interval => currentLine >= interval.start && currentLine <= interval.end);
+      const startLine = activeDef ? activeDef.start : 1;
+      const endLine = activeDef ? activeDef.end : lines.length;
+
+      const labelDefRegex = new RegExp(`^\\s*(${word})\\s*:`);
+      for (let i = startLine; i <= endLine; i++) {
+        const line = lines[i - 1] || '';
+        if (labelDefRegex.test(line)) {
+          const commentLines: string[] = [];
+          let p = i - 1;
+          while (p >= startLine) {
+            const trimmed = (lines[p - 1] || '').trim();
+            if (trimmed.startsWith('//')) {
+              commentLines.unshift(trimmed.replace(/^\/\/+/, '').trim());
+              p--;
+            } else if (trimmed === '') {
+              p--;
+            } else {
+              break;
+            }
+          }
+          return { line: i, comment: commentLines.join('\n') };
+        }
+      }
+      return null;
+    };
+
+    // 悬停提示
     const nativeHoverProvider = createRopHoverProvider(
       getAutocompleteMetaWithLibs,
-      (libName: string) => globalLibsRef.current.find(l => l.name === libName)?.code
+      (libName: string) => {
+        const lib = vfsLibsRef.current.find((l: ManagedLib) => l.name === libName);
+        return lib ? (lib.versions[lib.activeVersion]?.code || "") : "";
+      }
     );
     monaco.languages.registerHoverProvider(ROP_LANG_ID, {
       provideHover: async (model: any, position: any) => {
@@ -417,9 +413,7 @@ export default function App() {
         if (!wordInfo) return null;
 
         const nativeResult = await Promise.resolve(nativeHoverProvider.provideHover(model, position));
-        if (nativeResult) {
-          return nativeResult;
-        }
+        if (nativeResult) return nativeResult;
 
         const labelInfo = getLabelDefinition(wordInfo.word, model.getValue(), position.lineNumber);
         if (labelInfo) {
@@ -429,12 +423,11 @@ export default function App() {
             ]
           };
         }
-
         return null;
       }
     });
 
-    // 3. 定义跳转
+    // 定义跳转
     const nativeDefinitionProvider = createRopDefinitionProvider();
     monaco.languages.registerDefinitionProvider(ROP_LANG_ID, {
       provideDefinition: async (model: any, position: any) => {
@@ -442,9 +435,7 @@ export default function App() {
         if (!wordInfo) return null;
 
         const nativeDef = await Promise.resolve(nativeDefinitionProvider.provideDefinition(model, position));
-        if (nativeDef) {
-          return nativeDef;
-        }
+        if (nativeDef) return nativeDef;
 
         const labelInfo = getLabelDefinition(wordInfo.word, model.getValue(), position.lineNumber);
         if (labelInfo) {
@@ -458,7 +449,6 @@ export default function App() {
             }
           };
         }
-
         return null;
       }
     });
@@ -468,21 +458,16 @@ export default function App() {
     editorRef.current = editor;
     monacoRef.current = monaco;
     editor.onDidChangeCursorPosition(() => handleCursorChange(editor));
-
     (window as any).__debug_editor = editor;
-    (window as any).__debug = { 
-      ...(window as any).__debug || {},
-      get editor() { return editor; }
-    };
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#121212', color: '#e0e0e0', position: 'fixed', top: 0, left: 0 }}>
       {/* 顶部状态栏 */}
       <div style={{ padding: '12px 24px', background: '#1a1a1a', borderBottom: '1px solid #2d2d2d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#00ffb3' }}>ROP IDE 2nd</h2>
-          <span style={{ fontSize: '12px', color: '#666', fontFamily: "'JetBrains Mono', monospace", fontWeight: 'bold' }}>v{pkg.version}</span>
+          <span style={{ fontSize: '12px', color: '#666', fontFamily: "'JetBrains Mono', monospace", fontWeight: 'bold', marginRight: '5px' }}>v{pkg.version}</span>
           
           <button 
             type="button"
@@ -494,7 +479,7 @@ export default function App() {
             📦 Global Library
           </button>
         </div>
-
+        
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#111', padding: '4px 12px', borderRadius: '20px', border: '1px solid #222' }}>
           <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isOnline ? '#00ffb3' : '#ff5555', boxShadow: isOnline ? '0 0 8px #00ffb3' : '0 0 8px #ff5555' }} />
           <span style={{ fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", color: isOnline ? '#aaa' : '#ff8888' }}>
@@ -529,9 +514,11 @@ export default function App() {
           {activeViewLib ? (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
               <div style={{ background: '#161616', padding: '10px 20px', borderBottom: '1px solid #252525', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ fontSize: '13px', fontFamily: "'JetBrains Mono', monospace" }}>
+                <div style={{ fontSize: '13px', fontFamily: "'JetBrains Mono', monospace" }}> 
                   <span style={{ color: '#666' }}>READONLY_VFS // </span>
-                  <span style={{ color: '#00ffb3', fontWeight: 'bold' }}>@{activeViewLib.name}</span>
+                  {/* 🚀 修正：去掉了多余的 @ 渲染前缀 */}
+                  <span style={{ color: '#00ffb3', fontWeight: 'bold' }}>{activeViewLib.name}</span>
+                  <span style={{ color: '#888', marginLeft: '6px' }}>(v{activeViewLib.activeVersion})</span>
                   <span style={{ color: '#444', marginLeft: '10px' }}>by {activeViewLib.author}</span>
                 </div>
                 <button 
@@ -544,7 +531,10 @@ export default function App() {
               </div>
               <div style={{ flex: 1, width: '100%' }}>
                 <Editor
-                  height="100%" theme="ropTheme" language={ROP_LANG_ID} value={activeViewLib.code}
+                  height="100%" 
+                  theme="ropTheme" 
+                  language={ROP_LANG_ID} 
+                  value={activeViewLib.versions[activeViewLib.activeVersion]?.code || ""}
                   options={{ 
                     fontSize: 13, minimap: { enabled: false }, readOnly: true,
                     fontFamily: "'JetBrains Mono', monospace", automaticLayout: true,
@@ -562,7 +552,7 @@ export default function App() {
               {compileOutput && !compileOutput.success && (
                 <div style={{ background: '#140c0c', border: '1px solid #5a2323', borderRadius: '6px', overflow: 'hidden' }}>
                   <div style={{ background: '#2c1616', padding: '6px 14px', fontSize: '12px', color: '#ff8888', fontWeight: 'bold' }}>⚠️ COMPILATION_FAILED</div>
-                  <pre style={{ margin: 0, padding: '16px', fontSize: '13px', lineHeight: '1.6', color: '#f8f8f2', whiteSpace: 'pre-wrap', textAlign: 'left',fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Hiragino Sans GB", "Microsoft YaHei", sans-serif'}}>
+                  <pre style={{ margin: 0, padding: '16px', fontSize: '13px', lineHeight: '1.6', color: '#f8f8f2', whiteSpace: 'pre-wrap', textAlign: 'left', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Hiragino Sans GB", "Microsoft YaHei", sans-serif'}}>
                     {compileOutput.error_message}
                   </pre>
                 </div>
@@ -639,8 +629,10 @@ export default function App() {
         isOpen={isModalOpen} 
         onClose={() => setIsModalOpen(false)} 
         currentCode={code} 
-        onImportCode={(importedCode) => setCode(importedCode)}
-        onRefreshLibs={(libs) => setGlobalLibs(libs)}
+        vfsLibs={vfsLibs}
+        isRefreshing={isRefreshing} // 传入刷新状态
+        onManualRefresh={() => refreshVFS(true)} // 传入刷新句柄
+        onUpdateVfs={refreshVFS} // 统一使用 refreshVFS 函数
         onDirectViewLib={(lib) => {
           setActiveViewLib(lib);
           setIsModalOpen(false);
@@ -651,6 +643,7 @@ export default function App() {
 }
 
 function getSampleCode(): string {
+  // 🚀 修正：内置示例的库导入同步去除了过时的 @ 符号
   return `@import(std_io)
 
 @offset(0xd710)

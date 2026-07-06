@@ -6,6 +6,7 @@ declare const monaco: {
     languages: typeof languages;
 };
 
+// 稳健的 def 区间提取（支持跨行 def 声明与含默认值的参数）
 export function getDefIntervals(model: any): DefInterval[] {
   const totalLines = model.getLineCount();
   const intervals: DefInterval[] = [];
@@ -16,7 +17,7 @@ export function getDefIntervals(model: any): DefInterval[] {
       let braceLine = i;
       let foundBrace = false;
       while (braceLine <= totalLines) {
-        if (model.getLineContent(braceLine).indexOf('{') !== -1) {
+        if (model.getLineContent(braceLine).includes('{')) {
           foundBrace = true;
           break;
         }
@@ -46,7 +47,6 @@ export function getDefIntervals(model: any): DefInterval[] {
   return intervals;
 }
 
-
 // 从元数据中获取参数名（字符串数组）
 function getMacroParamNames(meta: AutocompleteMeta, macroName: string): string[] {
   if (!meta?.macro_details) return [];
@@ -57,7 +57,6 @@ function getMacroParamNames(meta: AutocompleteMeta, macroName: string): string[]
     if (typeof details[0] === 'string') {
       return details as unknown as string[];
     }
-    // 否则认为是 MacroParamInfo[]，提取 name
     return (details as any[]).map((p: any) => p.name || '');
   }
   return [];
@@ -208,8 +207,6 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
   };
 }
 
-// 后面的 createRopDefinitionProvider 和 createRopHoverProvider 保持不变
-
 // ==================== 2. 定义跳转提供者 ====================
 export function createRopDefinitionProvider() {
   return {
@@ -279,7 +276,6 @@ export function createRopHoverProvider(
         const meta = getWasmMetadata(currentCode);
         if (meta?.macro_names?.includes(targetWord)) {
           params = getMacroParamNames(meta, targetWord);
-          // 判断是否导入宏：当前文件没有 def 定义
           const defRegex = new RegExp(`\\bdef\\s+${targetWord}\\b`);
           let hasLocal = false;
           for (let i = 1; i <= model.getLineCount(); i++) {
