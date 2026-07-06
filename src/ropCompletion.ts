@@ -200,7 +200,7 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
             range,
           });
         });
-      } catch (e) { console.error("补全元数据提取失败", e); }
+      } catch (e) { }
 
       return { suggestions } as any;
     }
@@ -286,9 +286,7 @@ export function createRopHoverProvider(
           }
           isImported = !hasLocal;
         }
-      } catch (e) {
-        console.error("悬停元数据提取失败", e);
-      }
+      } catch (e) {}
 
       // 2. 查找本地 def 行（回退参数和文档）
       let defLineNumber = -1;

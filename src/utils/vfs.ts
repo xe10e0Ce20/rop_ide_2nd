@@ -1,67 +1,65 @@
 // src/utils/vfs.ts
 
+// 依赖库包数据结构
 export interface LibVersion {
   version: string;
   code: string;
   updatedAt: number;
 }
-
 export interface ManagedLib {
   name: string;
   author: string;
   description: string;
-  isLocal: boolean;       // true: 本地自建库, false: 缓存的线上公共库
-  activeVersion: string;  // 当前选择的版本（例如 "1.0.0"）
-  versions: Record<string, LibVersion>; // 核心：快照哈希表
+  isLocal: boolean;
+  activeVersion: string;
+  versions: Record<string, LibVersion>;
 }
 
-const DB_NAME = 'ROP_VFS_DATABASE';
-const DB_VERSION = 1;
-const STORE_NAME = 'libraries';
-
-export function initVFS(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
-    request.onupgradeneeded = (e: any) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'name' });
-      }
-    };
-  });
+export interface SnippetVersion {
+  version: string;
+  code: string;
+  updatedAt: number;
+}
+export interface PublicSnippet {
+  title: string;       // 标识符/标题
+  author: string;      // 署名维护者
+  description: string; // 描述说明
+  isLocal: boolean;    // 是否是本地自建
+  activeVersion: string; // 当前锁定的版本游标
+  versions: Record<string, SnippetVersion>; // 版本全家桶
 }
 
+// ==========================================
+// 依赖库底层存储 API
+// ==========================================
 export async function getAllVFSLibs(): Promise<ManagedLib[]> {
-  const db = await initVFS();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE_NAME, 'readonly');
-    const store = transaction.objectStore(STORE_NAME);
-    const request = store.getAll();
-    request.onsuccess = () => resolve(request.result || []);
-    request.onerror = () => reject(request.error);
-  });
+  const data = localStorage.getItem('vfs_managed_libs');
+  return data ? JSON.parse(data) : [];
 }
-
 export async function saveVFSLib(lib: ManagedLib): Promise<void> {
-  const db = await initVFS();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE_NAME, 'readwrite');
-    const store = transaction.objectStore(STORE_NAME);
-    const request = store.put(lib);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
+  const list = await getAllVFSLibs();
+  const idx = list.findIndex(l => l.name === lib.name);
+  if (idx > -1) list[idx] = lib; else list.push(lib);
+  localStorage.setItem('vfs_managed_libs', JSON.stringify(list));
+}
+export async function deleteVFSLib(name: string): Promise<void> {
+  const list = await getAllVFSLibs();
+  localStorage.setItem('vfs_managed_libs', JSON.stringify(list.filter(l => l.name !== name)));
 }
 
-export async function deleteVFSLib(name: string): Promise<void> {
-  const db = await initVFS();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE_NAME, 'readwrite');
-    const store = transaction.objectStore(STORE_NAME);
-    const request = store.delete(name);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
+export async function getAllPublicSnippets(): Promise<PublicSnippet[]> {
+  const data = localStorage.getItem('vfs_public_snippets_v2'); // 升级 v2 隔离老数据
+  return data ? JSON.parse(data) : [];
+}
+
+export async function savePublicSnippet(snippet: PublicSnippet): Promise<void> {
+  const list = await getAllPublicSnippets();
+  const idx = list.findIndex(s => s.title === snippet.title);
+  if (idx > -1) list[idx] = snippet; else list.push(snippet);
+  localStorage.setItem('vfs_public_snippets_v2', JSON.stringify(list));
+}
+
+export async function deletePublicSnippet(title: string): Promise<void> {
+  const list = await getAllPublicSnippets();
+  localStorage.setItem('vfs_public_snippets_v2', JSON.stringify(list.filter(s => s.title !== title)));
 }

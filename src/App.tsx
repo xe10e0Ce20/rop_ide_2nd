@@ -5,8 +5,8 @@ import { ROP_LANG_ID, languageDef, configDef } from './ropLanguage';
 import { createRopCompletionProvider, createRopHoverProvider, createRopDefinitionProvider } from './ropCompletion';
 import type { WebCompileResult, AutocompleteMeta } from './types';
 import RopLibraryModal from './components/RopLibraryModal';
-import { getAllVFSLibs, saveVFSLib, deleteVFSLib } from './utils/vfs';
-import type { ManagedLib, LibVersion } from './utils/vfs';
+import { getAllVFSLibs, getAllPublicSnippets, saveVFSLib, deleteVFSLib } from './utils/vfs';
+import type { ManagedLib, PublicSnippet, LibVersion } from './utils/vfs';
 
 import initWasm, { compile_for_web, get_autocomplete_metadata } from './wasm_pkg/rop_compiler';
 import pkg from '../package.json';
@@ -40,6 +40,7 @@ export default function App() {
 
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [vfsLibs, setVfsLibs] = useState<ManagedLib[]>([]);
+  const [publicSnippets, setPublicSnippets] = useState<PublicSnippet[]>([]);
   const vfsLibsRef = useRef<ManagedLib[]>([]);
 
   const [activeViewLib, setActiveViewLib] = useState<ManagedLib | null>(null);
@@ -65,14 +66,60 @@ export default function App() {
   const refreshVFS = useCallback(async (isManual = false) => {
     if (isManual) setIsRefreshing(true);
     try {
-      const libs = await getAllVFSLibs();
-      setVfsLibs(libs);
-    } catch (err) {
-      console.error("读取本地 VFS 失败:", err);
-    } finally {
-      if (isManual) {
-        setTimeout(() => setIsRefreshing(false), 300);
+      // 1. 读取本地 VFS（本地自建数据默认带有 isLocal = true）
+      const localLibs = await getAllVFSLibs();
+      const localSnippets = await getAllPublicSnippets();
+
+      const finalLibs = [...localLibs];
+      const finalSnippets = [...localSnippets];
+
+      // 2. 同步云端 KV 资产
+      if (navigator.onLine) {
+        try {
+          // A. 异步拉取并清洗云端依赖库
+          const resLibs = await fetch('/api/libs');
+          if (resLibs.ok) {
+            const cloudLibs: any[] = await resLibs.json();
+            cloudLibs.forEach(cLib => {
+              // 🚀 核心修复：强行兼容后端字段，确保 name 绝对存在
+              const resolvedName = cLib.name || cLib.title; 
+              if (resolvedName && !finalLibs.some(l => l.name === resolvedName)) {
+                finalLibs.push({
+                  ...cLib,
+                  name: resolvedName,
+                  isLocal: false // 标记为云端同步下来的资产
+                });
+              }
+            });
+          }
+
+          // B. 异步拉取并清洗云端代码片段
+          const resSnippets = await fetch('/api/snippets');
+          if (resSnippets.ok) {
+            const cloudSnippets: any[] = await resSnippets.json();
+            cloudSnippets.forEach(cSnippet => {
+              const resolvedTitle = cSnippet.title || cSnippet.name;
+              if (resolvedTitle && !finalSnippets.some(s => s.title === resolvedTitle)) {
+                finalSnippets.push({
+                  ...cSnippet,
+                  title: resolvedTitle,
+                  isLocal: false // 标记为云端同步下来的资产
+                });
+              }
+            });
+          }
+        } catch (netErr) {
+          console.warn("⚠️ 云端网络资产同步失败，已降级至本地模式:", netErr);
+        }
       }
+
+      // 3. 驱动 React 渲染轴
+      setVfsLibs(finalLibs);
+      setPublicSnippets(finalSnippets);
+    } catch (err) {
+      console.error("VFS 管道刷新彻底崩溃:", err);
+    } finally {
+      if (isManual) setTimeout(() => setIsRefreshing(false), 300);
     }
   }, []);
 
@@ -476,7 +523,7 @@ export default function App() {
             onMouseEnter={(e) => e.currentTarget.style.background = '#2a2a2a'}
             onMouseLeave={(e) => e.currentTarget.style.background = '#222'}
           >
-            📦 Global Library
+            📦 公共库/Global Library
           </button>
         </div>
         
@@ -516,7 +563,6 @@ export default function App() {
               <div style={{ background: '#161616', padding: '10px 20px', borderBottom: '1px solid #252525', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ fontSize: '13px', fontFamily: "'JetBrains Mono', monospace" }}> 
                   <span style={{ color: '#666' }}>READONLY_VFS // </span>
-                  {/* 🚀 修正：去掉了多余的 @ 渲染前缀 */}
                   <span style={{ color: '#00ffb3', fontWeight: 'bold' }}>{activeViewLib.name}</span>
                   <span style={{ color: '#888', marginLeft: '6px' }}>(v{activeViewLib.activeVersion})</span>
                   <span style={{ color: '#444', marginLeft: '10px' }}>by {activeViewLib.author}</span>
@@ -630,12 +676,17 @@ export default function App() {
         onClose={() => setIsModalOpen(false)} 
         currentCode={code} 
         vfsLibs={vfsLibs}
-        isRefreshing={isRefreshing} // 传入刷新状态
-        onManualRefresh={() => refreshVFS(true)} // 传入刷新句柄
-        onUpdateVfs={refreshVFS} // 统一使用 refreshVFS 函数
+        publicSnippets={publicSnippets} // 传入全新 V2 版本的片段数组
+        isRefreshing={isRefreshing}
+        onManualRefresh={() => refreshVFS(true)}
+        onUpdateVfs={refreshVFS}
         onDirectViewLib={(lib) => {
+          // 依赖库的常规查看（不覆盖工作区）
           setActiveViewLib(lib);
           setIsModalOpen(false);
+        }}
+        onOverwriteWorkarea={(freshCode) => {
+          setCode(freshCode); 
         }}
       />
     </div>
@@ -643,7 +694,6 @@ export default function App() {
 }
 
 function getSampleCode(): string {
-  // 🚀 修正：内置示例的库导入同步去除了过时的 @ 符号
   return `@import(std_io)
 
 @offset(0xd710)
