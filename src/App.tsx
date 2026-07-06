@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import Editor from '@monaco-editor/react';
 import type { Monaco } from '@monaco-editor/react';
 import { ROP_LANG_ID, languageDef, configDef } from './ropLanguage';
@@ -7,6 +7,7 @@ import type { WebCompileResult, AutocompleteMeta } from './types';
 import RopLibraryModal from './components/RopLibraryModal';
 
 import initWasm, { compile_for_web, get_autocomplete_metadata } from './wasm_pkg/rop_compiler';
+import pkg from '../package.json';
 
 const LOCAL_STORAGE_KEY = 'rop_ide_source_code_cache';
 
@@ -18,9 +19,20 @@ interface LibItem {
   updatedAt: number;
 }
 
+// 将 Map 或类 Map 对象转换为普通对象
+function toRecord(mapLike: any): Record<string, any> {
+  if (!mapLike) return {};
+  if (typeof mapLike.forEach === 'function') {
+    const obj: Record<string, any> = {};
+    mapLike.forEach((value: any, key: string) => { obj[key] = value; });
+    return obj;
+  }
+  return mapLike as Record<string, any>;
+}
+
 export default function App() {
   const [wasmReady, setWasmReady] = useState<boolean>(false);
-  const [editorWidth, setEditorWidth] = useState<number>(58); 
+  const [editorWidth, setEditorWidth] = useState<number>(58);
   const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
   
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
@@ -28,10 +40,15 @@ export default function App() {
   const globalLibsRef = useRef<LibItem[]>([]);
 
   const [activeViewLib, setActiveViewLib] = useState<LibItem | null>(null);
+  const [currentBlock, setCurrentBlock] = useState<string | null>(null);
+  const [highlightBytes, setHighlightBytes] = useState<{ start: number; end: number } | null>(null);
 
-  // 用来控制和刷新 Monaco Markers 的引用
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<Monaco | null>(null);
+
+  // 用于在回调中获取最新值
+  const spanMapRef = useRef<Record<string, [number, number, number, number][]>>({});
+  const activeBlockRef = useRef<string | null>(null);
 
   useEffect(() => {
     globalLibsRef.current = globalLibs;
@@ -107,7 +124,66 @@ export default function App() {
     }
   }, [code, wasmReady, globalLibs]);
 
-  // ==================== 错误波浪线（Markers）同步驱动 ====================
+  // 转换 blocks
+  const blocks = useMemo(() => {
+    if (!compileOutput?.blocks) return {};
+    return toRecord(compileOutput.blocks) as Record<string, string>;
+  }, [compileOutput]);
+
+  // 转换 span_map
+  const spanMapObj = useMemo(() => {
+    if (!compileOutput?.span_map) return {};
+    return toRecord(compileOutput.span_map) as Record<string, [number, number, number, number][]>;
+  }, [compileOutput]);
+
+  // 同步 ref
+  useEffect(() => {
+    spanMapRef.current = spanMapObj;
+  }, [spanMapObj]);
+
+  // 当前活动的 block（用户选择或自动第一个）
+  const activeBlockName = useMemo(() => {
+    if (currentBlock) return currentBlock;
+    const names = Object.keys(blocks);
+    return names.length > 0 ? names[0] : null;
+  }, [currentBlock, blocks]);
+
+  useEffect(() => {
+    activeBlockRef.current = activeBlockName;
+  }, [activeBlockName]);
+
+  // 调试暴露
+  useEffect(() => {
+    (window as any).__debug = { compileOutput, blocks, spanMapObj, activeBlockName };
+  }, [compileOutput, blocks, spanMapObj, activeBlockName]);
+
+  // 光标移动回调（使用 ref 获取最新值）
+  const handleCursorChange = useCallback((editor: any) => {
+    const position = editor.getPosition();
+    if (!position) return;
+    const model = editor.getModel();
+    if (!model) return;
+    const offset = model.getOffsetAt(position);
+
+    const block = activeBlockRef.current;
+    const map = spanMapRef.current;
+    // 不检查 compileOutput，因为 map 存在即代表编译成功且有 span
+    if (!block || !map[block]) {
+      setHighlightBytes(null);
+      return;
+    }
+
+    const mappings = map[block];
+    for (const [srcStart, srcEnd, outStart, outEnd] of mappings) {
+      if (offset >= srcStart && offset < srcEnd) {
+        setHighlightBytes({ start: outStart, end: outEnd });
+        return;
+      }
+    }
+    setHighlightBytes(null);
+  }, []);
+
+  // 错误波浪线同步
   useEffect(() => {
     const monaco = monacoRef.current;
     const editor = editorRef.current;
@@ -116,21 +192,16 @@ export default function App() {
     const model = editor.getModel();
     if (!model) return;
 
-    // 只要编译成功，或者没有产生有效的编译输出，就清除所有报错标记
     if (!compileOutput || compileOutput.success) {
       monaco.editor.setModelMarkers(model, "rop_compiler", []);
       return;
     }
 
-    // 编译失败，且后端清洗出了精确的行号和列号
     if (compileOutput.line !== undefined && compileOutput.line !== null &&
         compileOutput.column !== undefined && compileOutput.column !== null) {
       
       const errLine = compileOutput.line;
-      // 使用 ?? 1 彻底断绝零或 null 的可能性，让 TS 闭嘴
-      const errCol = compileOutput.column ?? 1; 
-      
-      // 提取错误发生行的文本，用来智能化决定波浪线高亮的右边界长度
+      const errCol = compileOutput.column ?? 1;
       const lineContent = model.getLineContent(errLine) || "";
       const endCol = Math.max(errCol + 1, lineContent.length + 1);
 
@@ -145,14 +216,8 @@ export default function App() {
         },
       ]);
     } else {
-      // 兜底：如果有些未定义错误没拿到行列，也先清空旧标记，防止残留在不相干的行
       monaco.editor.setModelMarkers(model, "rop_compiler", []);
     }
-  }, [compileOutput]);
-
-  const blocks = useMemo(() => {
-    if (!compileOutput || !compileOutput.blocks) return {};
-    return compileOutput.blocks instanceof Map ? Object.fromEntries(compileOutput.blocks) : compileOutput.blocks;
   }, [compileOutput]);
 
   const handleEditorWillMount = (monaco: Monaco) => {
@@ -164,15 +229,15 @@ export default function App() {
       base: 'vs-dark', 
       inherit: true,   
       rules: [
-          { token: 'rop.keyword', foreground: '#C586C0', fontStyle: 'bold' },      // 核心控制流关键字
-          { token: 'rop.directive', foreground: '#CE9178' },                        // 编译器指令
-          { token: 'rop.label.definition', foreground: '#D9662C', fontStyle: 'bold' }, // 标签定义
-          { token: 'rop.label.reference', foreground: '#4FC1FF' },                 // 标签调用
-          { token: 'rop.label.rawrefrence', foreground: '#8BE9FD' },                  // 标签原始引用（&）
-          { token: 'rop.macro.call', foreground: '#DCDCAA' },                      // 宏函数调用
-          { token: 'rop.bytecode', foreground: '#B5CEA8' },                        // 严格机器码字节
-          { token: 'rop.hex', foreground: '#0CD4AF' },                             // 长地址常数
-          { token: 'rop.comment', foreground: '#6A9955', fontStyle: 'italic' }     // 代码注释
+          { token: 'rop.keyword', foreground: '#C586C0', fontStyle: 'bold' },
+          { token: 'rop.directive', foreground: '#CE9178' },
+          { token: 'rop.label.definition', foreground: '#D9662C', fontStyle: 'bold' },
+          { token: 'rop.label.reference', foreground: '#4FC1FF' },
+          { token: 'rop.label.rawrefrence', foreground: '#8BE9FD' },
+          { token: 'rop.macro.call', foreground: '#DCDCAA' },
+          { token: 'rop.bytecode', foreground: '#B5CEA8' },
+          { token: 'rop.hex', foreground: '#0CD4AF' },
+          { token: 'rop.comment', foreground: '#6A9955', fontStyle: 'italic' }
       ],
       colors: {
           'editor.background': '#151515', 
@@ -183,36 +248,33 @@ export default function App() {
     monaco.editor.setTheme('ropTheme');
 
     const getAugmentedSourceForMetadata = (src: string): string => {
-    const lines = src.split('\n');
-    const importPattern = /^@import\s*\(\s*([a-zA-Z_]\w*)\s*\)\s*$/;
-    const libNames: string[] = [];
+      const lines = src.split('\n');
+      const importPattern = /^@import\s*\(\s*([a-zA-Z_]\w*)\s*\)\s*$/;
+      const libNames: string[] = [];
 
-    for (const line of lines) {
-      const match = line.trim().match(importPattern);
-      if (match) {
-        libNames.push(match[1]);
+      for (const line of lines) {
+        const match = line.trim().match(importPattern);
+        if (match) {
+          libNames.push(match[1]);
+        }
       }
-    }
 
-    if (libNames.length === 0) return src;
+      if (libNames.length === 0) return src;
 
-    // 从 globalLibsRef 获取对应库代码
-    const libCodeBlocks = libNames
-      .map(name => {
-        const lib = globalLibsRef.current.find(l => l.name === name);
-        return lib ? lib.code : '';
-      })
-      .filter(code => code.length > 0);
+      const libCodeBlocks = libNames
+        .map(name => {
+          const lib = globalLibsRef.current.find(l => l.name === name);
+          return lib ? lib.code : '';
+        })
+        .filter(code => code.length > 0);
 
-    // 把所有库代码拼接到当前源码后面（不影响主文件的语法解析，因为 macro_def 可以出现在任何位置）
-    return src + '\n' + libCodeBlocks.join('\n');
-  };
+      return src + '\n' + libCodeBlocks.join('\n');
+    };
 
-  // 创建带库支持的 metadata 回调
-  const getAutocompleteMetaWithLibs = (src: string): AutocompleteMeta => {
-    const augmentedSource = getAugmentedSourceForMetadata(src);
-    return get_autocomplete_metadata(augmentedSource) as AutocompleteMeta;
-  };
+    const getAutocompleteMetaWithLibs = (src: string): AutocompleteMeta => {
+      const augmentedSource = getAugmentedSourceForMetadata(src);
+      return get_autocomplete_metadata(augmentedSource) as AutocompleteMeta;
+    };
 
     // 1. 自动补全
     monaco.languages.registerCompletionItemProvider(
@@ -220,7 +282,6 @@ export default function App() {
       createRopCompletionProvider(getAutocompleteMetaWithLibs)
     );
 
-    // 静态分析提取引擎：精准定位地址标签与其头部注释
     const getLabelDefinition = (word: string, codeText: string) => {
       const lines = codeText.split('\n');
       const labelDefRegex = new RegExp(`^\\s*(${word})\\s*:`);
@@ -311,6 +372,7 @@ export default function App() {
   const handleEditorDidMount = (editor: any, monaco: Monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
+    editor.onDidChangeCursorPosition(() => handleCursorChange(editor));
   };
 
   return (
@@ -318,8 +380,8 @@ export default function App() {
       {/* 顶部状态栏 */}
       <div style={{ padding: '12px 24px', background: '#1a1a1a', borderBottom: '1px solid #2d2d2d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-          <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#00ffb3' }}>ROP IDE</h2>
-          <span style={{ fontSize: '12px', color: '#666', fontFamily: "'JetBrains Mono', monospace", fontWeight: 'bold' }}>v0.0.1</span>
+          <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#00ffb3' }}>ROP IDE 2nd</h2>
+          <span style={{ fontSize: '12px', color: '#666', fontFamily: "'JetBrains Mono', monospace", fontWeight: 'bold' }}>v{pkg.version}</span>
           
           <button 
             type="button"
@@ -399,7 +461,7 @@ export default function App() {
               {compileOutput && !compileOutput.success && (
                 <div style={{ background: '#140c0c', border: '1px solid #5a2323', borderRadius: '6px', overflow: 'hidden' }}>
                   <div style={{ background: '#2c1616', padding: '6px 14px', fontSize: '12px', color: '#ff8888', fontWeight: 'bold' }}>⚠️ COMPILATION_FAILED</div>
-                  <pre style={{ margin: 0, padding: '16px', fontSize: '13px', lineHeight: '1.6', color: '#f8f8f2', whiteSpace: 'pre-wrap', textAlign: 'left',fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Hiragino Sans GB", "Microsoft YaHei", sans-serif'}}>
+                  <pre style={{ margin: 0, padding: '16px', fontSize: '13px', lineHeight: '1.6', color: '#f8f8f2', whiteSpace: 'pre-wrap', textAlign: 'left',fontFamily: '"Consolas", "Microsoft YaHei", sans-serif'}}>
                     {compileOutput.error_message}
                   </pre>
                 </div>
@@ -415,18 +477,53 @@ export default function App() {
                   ) : (
                     Object.keys(blocks).map((blockName) => {
                       const hexStr = blocks[blockName];
-                      const chunks = hexStr.match(/.{1,32}/g) || [];
+                      const bytes = hexStr.match(/.{1,2}/g) || [];
+                      const isActive = activeBlockName === blockName;
+                      const hlStart = isActive && highlightBytes ? highlightBytes.start : -1;
+                      const hlEnd = isActive && highlightBytes ? highlightBytes.end : -1;
+
+                      const rows: string[][] = [];
+                      for (let i = 0; i < bytes.length; i += 16) {
+                        rows.push(bytes.slice(i, i + 16));
+                      }
+
                       return (
                         <div key={blockName} style={{ background: '#111', borderRadius: '6px', border: '1px solid #262626', overflow: 'hidden' }}>
-                          <div style={{ background: '#181818', padding: '8px 16px', borderBottom: '1px solid #262626', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span style={{ fontWeight: 'bold', fontSize: '14px', color: '#fff' }}>block <span style={{ color: '#00ffb3' }}>{blockName}</span></span>
+                          <div
+                            onClick={() => setCurrentBlock(blockName)}
+                            style={{ background: '#181818', padding: '8px 16px', borderBottom: '1px solid #262626', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }}
+                          >
+                            <span style={{ fontWeight: 'bold', fontSize: '14px', color: '#fff' }}>
+                              block <span style={{ color: '#00ffb3' }}>{blockName}</span>
+                              {isActive && <span style={{ marginLeft: '8px', color: '#888', fontSize: '12px' }}>◀ 当前高亮</span>}
+                            </span>
                           </div>
-                          <div style={{ padding: '12px 16px', fontSize: '14px', lineHeight: '1.6', color: '#a9b7c6', background: '#0d0d0d' }}>
-                            {chunks.map((chunk: string, index: number) => (
-                              <div key={index} style={{ display: 'flex', padding: '2px 0' }}>
-                                <span style={{ color: '#569cd6', width: '80px', flexShrink: 0 }}>+0x{(index * 16).toString(16).toUpperCase().padStart(4, '0')}</span>
+                          <div style={{ padding: '12px 16px', fontFamily: "'JetBrains Mono', monospace", fontSize: '14px', background: '#0d0d0d' }}>
+                            {rows.map((row, rowIdx) => (
+                              <div key={rowIdx} style={{ display: 'flex', alignItems: 'center', padding: '2px 0' }}>
+                                <span style={{ color: '#569cd6', width: '80px', flexShrink: 0 }}>
+                                  +0x{(rowIdx * 16).toString(16).toUpperCase().padStart(4, '0')}
+                                </span>
                                 <span style={{ color: '#333', marginRight: '10px' }}>|</span>
-                                <span style={{ color: '#ce9178', letterSpacing: '0.5px' }}>{(chunk.match(/.{1,2}/g)?.join(' ') || '').toUpperCase()}</span>
+                                <span style={{ display: 'flex', gap: '4px' }}>
+                                  {row.map((byteHex, byteIdx) => {
+                                    const byteOffset = rowIdx * 16 + byteIdx;
+                                    const isHighlighted = byteOffset >= hlStart && byteOffset < hlEnd;
+                                    return (
+                                      <span
+                                        key={byteIdx}
+                                        style={{
+                                          color: isHighlighted ? '#000' : '#ce9178',
+                                          backgroundColor: isHighlighted ? '#00ffb3' : 'transparent',
+                                          padding: '1px 2px',
+                                          borderRadius: '2px',
+                                        }}
+                                      >
+                                        {byteHex.toUpperCase()}
+                                      </span>
+                                    );
+                                  })}
+                                </span>
                               </div>
                             ))}
                           </div>

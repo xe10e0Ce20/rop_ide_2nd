@@ -1,13 +1,11 @@
 // src/ropCompletion.ts
-import type { AutocompleteMeta, DefInterval, MacroParamInfo } from './types';
+import type { AutocompleteMeta, DefInterval } from './types';
 import type { languages } from 'monaco-editor';
 
 declare const monaco: {
     languages: typeof languages;
 };
-/**
- * 共享辅助函数：构建全文件的所有 def 块“禁区地图”
- */
+
 function getDefIntervals(model: any): DefInterval[] {
   const totalLines = model.getLineCount();
   const defRegex = /\bdef\s+[a-zA-Z_]\w*\s*\(.*?\)\s*\{/;
@@ -22,7 +20,6 @@ function getDefIntervals(model: any): DefInterval[] {
         const subContent = model.getLineContent(j);
         const openBraces = (subContent.match(/\{/g) || []).length;
         const closeBraces = (subContent.match(/\}/g) || []).length;
-        
         if (j === i) braceCount = openBraces;
         else braceCount += openBraces - closeBraces;
 
@@ -33,27 +30,31 @@ function getDefIntervals(model: any): DefInterval[] {
       }
       if (defEndLine !== -1) {
         defIntervals.push({ start: i, end: defEndLine });
-        i = defEndLine; 
+        i = defEndLine;
       }
     }
   }
   return defIntervals;
 }
 
-// 辅助：从元数据中提取参数信息（对象数组）
-function getMacroParamsInfo(meta: AutocompleteMeta, macroName: string): MacroParamInfo[] {
+// 从元数据中获取参数名（字符串数组）
+function getMacroParamNames(meta: AutocompleteMeta, macroName: string): string[] {
   if (!meta?.macro_details) return [];
-  return meta.macro_details[macroName] ?? [];
-}
-
-// 提取参数名数组（向后兼容）
-function getMacroParams(meta: AutocompleteMeta, macroName: string): string[] {
-  return getMacroParamsInfo(meta, macroName).map(p => p.name);
+  const details = meta.macro_details[macroName];
+  if (!details) return [];
+  // 兼容旧版（字符串数组）和新版（MacroParamInfo 数组）
+  if (Array.isArray(details) && details.length > 0) {
+    if (typeof details[0] === 'string') {
+      return details as unknown as string[];
+    }
+    // 否则认为是 MacroParamInfo[]，提取 name
+    return (details as any[]).map((p: any) => p.name || '');
+  }
+  return [];
 }
 
 /**
  * 从源码中提取指定宏定义前的连续注释行
- * @returns 注释文本数组（已去除 // 前缀），未找到时返回空数组
  */
 function extractMacroDocFromSource(source: string, macroName: string): string[] {
   const lines = source.split('\n');
@@ -79,7 +80,7 @@ function extractMacroDocFromSource(source: string, macroName: string): string[] 
   return [];
 }
 
-// ==================== 1. 自动补全提供者 (逻辑复用保持同步) ====================
+// ==================== 1. 自动补全提供者 ====================
 export function createRopCompletionProvider(getWasmMetadata: (code: string) => AutocompleteMeta) {
   return {
     triggerCharacters: ['@', '&', '_', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'm', 'p', 's', 'r'],
@@ -99,10 +100,10 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
       const foundLabels: string[] = [];
       const currentLine = position.lineNumber;
 
-      // 使用共享的地图解析
       const defIntervals = getDefIntervals(model);
       const activeDef = defIntervals.find(interval => currentLine >= interval.start && currentLine <= interval.end);
 
+      // 收集作用域内的标签
       if (activeDef) {
         let defBodyContent = '';
         for (let i = activeDef.start; i <= activeDef.end; i++) {
@@ -159,40 +160,37 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
         }
       });
 
-      // 在 provideCompletionItems 里，原来处理宏的代码块改为：
+      // 宏补全
       try {
         const meta = getWasmMetadata(currentCode);
         (meta.macro_names || []).forEach((name: string) => {
           if (seenLabels.has(name)) return;
           seenLabels.add(name);
 
-          const paramsInfo = getMacroParamsInfo(meta, name);
-          const paramNames = paramsInfo.map(p => p.name);
-
-          // RT 标记检测
+          const params = getMacroParamNames(meta, name);
           const docLines = extractMacroDocFromSource(currentCode, name);
           const isRT = docLines.length > 0 && docLines[0].startsWith('RT');
-
-          const detailParts = [`Macro Def: (${paramNames.join(', ')})`];
+          const detailParts = [`Macro Def: (${params.join(', ')})`];
           if (isRT) detailParts.push('[RT]');
 
           suggestions.push({
             label: name,
             kind: Kind.Method,
-            insertText: `${name}(${paramNames.map((p, i) => `\${${i + 1}:${p}}`).join(', ')})`,
-            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet, // 4
+            insertText: `${name}(${params.map((p, i) => `\${${i + 1}:${p}}`).join(', ')})`,
+            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
             filterText: name,
             detail: detailParts.join(' '),
             range,
           });
         });
       } catch (e) { console.error("补全元数据提取失败", e); }
+
       return { suggestions } as any;
     }
   };
 }
 
-// ==================== 2. 隔离作用域的 标签定义跳转提供者 ====================
+// ==================== 2. 定义跳转提供者 ====================
 export function createRopDefinitionProvider() {
   return {
     provideDefinition: (model: any, position: any) => {
@@ -203,13 +201,10 @@ export function createRopDefinitionProvider() {
       const currentLine = position.lineNumber;
       const definitionRegex = new RegExp(`\\b${targetLabel}\\s*:`);
 
-      // 1. 获取禁区地图
       const defIntervals = getDefIntervals(model);
-      // 2. 判断当前点击源所处的严格域
       const activeDef = defIntervals.find(interval => currentLine >= interval.start && currentLine <= interval.end);
 
       if (activeDef) {
-        // 【严格局部跳转】：用户在 def 内部发起跳转，定义必须限制在当前的 defInterval 之间
         for (let lineNumber = activeDef.start; lineNumber <= activeDef.end; lineNumber++) {
           const currentLineText = model.getLineContent(lineNumber);
           const match = currentLineText.match(definitionRegex);
@@ -222,10 +217,8 @@ export function createRopDefinitionProvider() {
           }
         }
       } else {
-        // 【严格全局/Block跳转】：用户在全局/block中发起跳转，必须剔除所有 def 内部的同名标签
         const totalLines = model.getLineCount();
         for (let lineNumber = 1; lineNumber <= totalLines; lineNumber++) {
-          // 如果该行命中了任何一个 def 块内部，直接跳过审查
           const isInsideAnyDef = defIntervals.some(interval => lineNumber >= interval.start && lineNumber <= interval.end);
           if (isInsideAnyDef) continue;
 
@@ -246,6 +239,7 @@ export function createRopDefinitionProvider() {
   };
 }
 
+// ==================== 3. 悬停提供者 ====================
 export function createRopHoverProvider(
   getWasmMetadata: (code: string) => AutocompleteMeta,
   getLibSource?: (libName: string) => string | undefined
@@ -258,43 +252,83 @@ export function createRopHoverProvider(
       const targetWord = wordInfo.word;
       const currentCode = model.getValue();
 
-      // 获取元数据（优先使用）
-      let paramsInfo: MacroParamInfo[] = [];
+      // 1. 从元数据获取参数名
+      let params: string[] = [];
       let isImported = false;
       try {
         const meta = getWasmMetadata(currentCode);
-        paramsInfo = getMacroParamsInfo(meta, targetWord);
-        if (paramsInfo.length > 0) {
-          // 判断是否是导入宏（本地没有 def 行）
+        if (meta?.macro_names?.includes(targetWord)) {
+          params = getMacroParamNames(meta, targetWord);
+          // 判断是否导入宏：当前文件没有 def 定义
           const defRegex = new RegExp(`\\bdef\\s+${targetWord}\\b`);
-          let hasLocalDef = false;
+          let hasLocal = false;
           for (let i = 1; i <= model.getLineCount(); i++) {
             if (defRegex.test(model.getLineContent(i))) {
-              hasLocalDef = true;
+              hasLocal = true;
               break;
             }
           }
-          isImported = !hasLocalDef;
+          isImported = !hasLocal;
         }
       } catch (e) {}
 
-      if (paramsInfo.length === 0) return null;  // 无任何信息则不显示
+      // 2. 查找本地 def 行（回退参数和文档）
+      let defLineNumber = -1;
+      let defLineText = '';
+      const defRegex = new RegExp(`\\bdef\\s+${targetWord}\\b`);
+      for (let i = 1; i <= model.getLineCount(); i++) {
+        const line = model.getLineContent(i);
+        if (defRegex.test(line)) {
+          defLineNumber = i;
+          defLineText = line;
+          break;
+        }
+      }
 
-      // 构建签名参数显示
-      const paramDisplay = paramsInfo.map(p => {
-        let s = p.name;
-        if (p.type_spec) s += `:${p.type_spec}`;
-        if (p.has_default) s += ' = ...';
-        return s;
-      });
+      // 3. 如果仍然没有参数信息，尝试从导入库源码提取
+      if (defLineNumber === -1 && params.length === 0 && getLibSource) {
+        const importRegex = /@import\s*\(\s*([a-zA-Z_]\w*)\s*\)/g;
+        let match;
+        while ((match = importRegex.exec(currentCode)) !== null) {
+          const libName = match[1];
+          const libSource = getLibSource(libName);
+          if (libSource) {
+            const lines = libSource.split('\n');
+            const defLine = lines.find(line => new RegExp(`\\bdef\\s+${targetWord}\\b`).test(line));
+            if (defLine) {
+              const m = defLine.match(/\(([^)]*)\)/);
+              if (m) params = m[1].split(',').map(s => s.trim()).filter(Boolean);
+              isImported = true;
+              break;
+            }
+          }
+        }
+      }
 
-      const signature = `macro ${targetWord}(${paramDisplay.join(', ')})`;
+      if (params.length === 0 && defLineNumber === -1) return null;
 
-      // 提取文档注释
+      // 4. 构建签名
+      if (params.length === 0 && defLineText) {
+        const m = defLineText.match(/\(([^)]*)\)/);
+        if (m) params = m[1].split(',').map(s => s.trim()).filter(Boolean);
+      }
+
+      const signature = `macro ${targetWord}(${params.join(', ')})`;
+
+      // 5. 提取文档注释
       let docLines: string[] = [];
-      if (!isImported) {
-        docLines = extractMacroDocFromSource(currentCode, targetWord);
-      } else if (getLibSource) {
+      if (defLineNumber !== -1) {
+        for (let i = defLineNumber - 1; i >= 1; i--) {
+          const line = model.getLineContent(i).trim();
+          if (line.startsWith('//')) {
+            docLines.unshift(line.replace(/^\/\/\s*/, ''));
+          } else if (line === '') {
+            continue;
+          } else {
+            break;
+          }
+        }
+      } else if (isImported && getLibSource) {
         const importRegex = /@import\s*\(\s*([a-zA-Z_]\w*)\s*\)/g;
         let match;
         while ((match = importRegex.exec(currentCode)) !== null) {
@@ -306,7 +340,6 @@ export function createRopHoverProvider(
         }
       }
 
-      // RT 标记
       const isRT = docLines.length > 0 && docLines[0].startsWith('RT');
       const docText = docLines.length > 0 ? docLines.join('\n') : '*暂无文档说明*';
       const rtBadge = isRT ? ' 🔴 RT' : '';
