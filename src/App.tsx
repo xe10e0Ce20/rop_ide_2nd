@@ -83,68 +83,80 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-  // 💡 在 Effect 内部直接声明或包裹异步逻辑
-  const loadCloudVersion = async () => {
-    try {
-      const response = await fetch(`/version?t=${Date.now()}`, {
-        method: 'GET',
-        cache: 'no-store',
-        headers: {
-          'Pragma': 'no-cache',
-          'Cache-Control': 'no-cache'
-        }
-      });
-
-      if (response.ok) {
-        const text = await response.text();
-        setCloudVersion(text.trim());
-      } else {
-        setCloudVersion('UNKNOWN');
-      }
-    } catch (err) {
-      console.warn("获取云端静态版本失败:", err);
-      setCloudVersion('OFFLINE');
-    }
-  };
-
-  loadCloudVersion();
-  // 💡 保持依赖项数组为空（[]），使其只在组件挂载时无副作用地执行一次
-}, []);
-
-  useEffect(() => {
-    vfsLibsRef.current = vfsLibs;
-  }, [vfsLibs]);
-
-  const [code, setCode] = useState<string>(() => {
-    const cachedData = localStorage.getItem(LOCAL_STORAGE_KEY);
-    return cachedData === null || cachedData === '' ? getSampleCode() : cachedData;
-  });
-
-  // 在 App.tsx 内注入以下检测逻辑：
-  const [isPwaCached, setIsPwaCached] = useState<boolean>(false);
-
-  useEffect(() => {
-    // 检查当前 Service Worker 是否已经控制了页面且资源已就绪
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.ready.then((registration) => {
-        // 如果当前页面已经被 SW 接管，说明之前的静态资源已经预缓存完了
-        if (navigator.serviceWorker.controller) {
-          setIsPwaCached(true);
-        }
-        
-        // 监听全新的激活/更新事件
-        registration.addEventListener('updatefound', () => {
-          const newWorker = registration.installing;
-          if (newWorker) {
-            newWorker.addEventListener('statechange', () => {
-              if (newWorker.state === 'activated') {
-                setIsPwaCached(true);
-              }
-            });
+    // 💡 在 Effect 内部直接声明或包裹异步逻辑
+    const loadCloudVersion = async () => {
+      try {
+        const response = await fetch(`/version?t=${Date.now()}`, {
+          method: 'GET',
+          cache: 'no-store',
+          headers: {
+            'Pragma': 'no-cache',
+            'Cache-Control': 'no-cache'
           }
         });
+
+        if (response.ok) {
+          const text = await response.text();
+          setCloudVersion(text.trim());
+        } else {
+          setCloudVersion('UNKNOWN');
+        }
+      } catch (err) {
+        console.warn("获取云端静态版本失败:", err);
+        setCloudVersion('OFFLINE');
+      }
+    };
+
+    loadCloudVersion();
+    // 💡 保持依赖项数组为空（[]），使其只在组件挂载时无副作用地执行一次
+  }, []);
+
+    useEffect(() => {
+      vfsLibsRef.current = vfsLibs;
+    }, [vfsLibs]);
+
+    const [code, setCode] = useState<string>(() => {
+      const cachedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+      return cachedData === null || cachedData === '' ? getSampleCode() : cachedData;
+    });
+
+    // 在 App.tsx 内注入以下检测逻辑：
+    const [isPwaCached, setIsPwaCached] = useState<boolean>(false);
+
+    useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+
+    // 💡 1. 封装一个核心状态更新函数
+    const checkAndSetPwaStatus = () => {
+      if (navigator.serviceWorker.controller) {
+        // 只有当前页面真正被 Service Worker 控制了，才算离线资产就绪
+        setIsPwaCached(true);
+      }
+    };
+
+    // 💡 2. 初次挂载时立刻检查一次（如果用户是第二次打开，会直接命中这里）
+    checkAndSetPwaStatus();
+
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      checkAndSetPwaStatus();
+    });
+
+    // 💡 4. 保留对正在下载/安装过程的精准追踪（处理非首次打开时的后台静默更新）
+    navigator.serviceWorker.ready.then((registration) => {
+      // 再次校准
+      checkAndSetPwaStatus();
+
+      registration.addEventListener('updatefound', () => {
+        const newWorker = registration.installing;
+        if (!newWorker) return;
+
+        newWorker.addEventListener('statechange', () => {
+          // 当新 Worker 状态发生改变时，触发检查
+          // 如果新 Worker 成功进入控制状态（或者旧的依然在控制），保持状态正确
+          checkAndSetPwaStatus();
+        });
       });
-    }
+    });
   }, []);
 
   // 🛠️ 1. 修复 refreshVFS 里的 controller 作用域与报错问题
