@@ -237,7 +237,7 @@ export default function RopLibraryModal({
             </div>
 
             <form onSubmit={handleSaveOrPublish} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <input style={{ background: '#111', border: '1px solid #333', color: '#fff', padding: '8px', fontSize: '12px', borderRadius: '4px' }} placeholder={assetType === 'package' ? "依赖映射标识符 (如 std_math)" : "代码片段标题 (如 exp_payload_v1)"} value={name} onChange={e => setName(e.target.value)} />
+              <input style={{ background: '#111', border: '1px solid #333', color: '#fff', padding: '8px', fontSize: '12px', borderRadius: '4px' }} placeholder={assetType === 'package' ? "库名称" : "代码标题"} value={name} onChange={e => setName(e.target.value)} />
               <input style={{ background: '#111', border: '1px solid #333', color: '#fff', padding: '8px', fontSize: '12px', borderRadius: '4px' }} placeholder="版本号 (如 1.0.0)" value={version} onChange={e => setVersion(e.target.value)} />
               <input style={{ background: '#111', border: '1px solid #333', color: '#fff', padding: '8px', fontSize: '12px', borderRadius: '4px' }} placeholder="署名维护者" value={author} onChange={e => setAuthor(e.target.value)} />
               <textarea style={{ background: '#111', border: '1px solid #333', color: '#fff', padding: '8px', fontSize: '12px', height: '80px', resize: 'none', borderRadius: '4px' }} placeholder="简短补充说明..." value={desc} onChange={e => setDesc(e.target.value)} />
