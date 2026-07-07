@@ -63,65 +63,85 @@ export default function App() {
     return cachedData === null || cachedData === '' ? getSampleCode() : cachedData;
   });
 
+  // 在 App.tsx 内注入以下检测逻辑：
+  const [isPwaCached, setIsPwaCached] = useState<boolean>(false);
+
+  useEffect(() => {
+    // 检查当前 Service Worker 是否已经控制了页面且资源已就绪
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready.then((registration) => {
+        // 如果当前页面已经被 SW 接管，说明之前的静态资源已经预缓存完了
+        if (navigator.serviceWorker.controller) {
+          setIsPwaCached(true);
+        }
+        
+        // 监听全新的激活/更新事件
+        registration.addEventListener('updatefound', () => {
+          const newWorker = registration.installing;
+          if (newWorker) {
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'activated') {
+                setIsPwaCached(true);
+              }
+            });
+          }
+        });
+      });
+    }
+  }, []);
+
+  // 🛠️ 1. 修复 refreshVFS 里的 controller 作用域与报错问题
   const refreshVFS = useCallback(async (isManual = false) => {
     if (isManual) setIsRefreshing(true);
     try {
-      // 1. 读取本地 VFS（本地自建数据默认带有 isLocal = true）
       const localLibs = await getAllVFSLibs();
       const localSnippets = await getAllPublicSnippets();
 
       const finalLibs = [...localLibs];
       const finalSnippets = [...localSnippets];
 
-      // 2. 同步云端 KV 资产
-      if (navigator.onLine) {
+      if (navigator.onLine && isOnline) {
+        // 💡 正确在 try/catch 同步块作用域内声明 controller
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 1500);
+
         try {
-          // A. 异步拉取并清洗云端依赖库
-          const resLibs = await fetch('/api/libs');
+          const resLibs = await fetch('/api/libs', { signal: controller.signal });
           if (resLibs.ok) {
             const cloudLibs: any[] = await resLibs.json();
             cloudLibs.forEach(cLib => {
-              // 🚀 核心修复：强行兼容后端字段，确保 name 绝对存在
               const resolvedName = cLib.name || cLib.title; 
-              if (resolvedName && !finalLibs.some(l => l.name === resolvedName)) {
-                finalLibs.push({
-                  ...cLib,
-                  name: resolvedName,
-                  isLocal: false // 标记为云端同步下来的资产
-                });
+              if (resolvedName && !finalLibs.some(l => l.name === resolvedName && l.isLocal === false)) {
+                finalLibs.push({ ...cLib, name: resolvedName, isLocal: false });
               }
             });
           }
 
-          // B. 异步拉取并清洗云端代码片段
-          const resSnippets = await fetch('/api/snippets');
+          const resSnippets = await fetch('/api/snippets', { signal: controller.signal });
           if (resSnippets.ok) {
             const cloudSnippets: any[] = await resSnippets.json();
             cloudSnippets.forEach(cSnippet => {
               const resolvedTitle = cSnippet.title || cSnippet.name;
-              if (resolvedTitle && !finalSnippets.some(s => s.title === resolvedTitle)) {
-                finalSnippets.push({
-                  ...cSnippet,
-                  title: resolvedTitle,
-                  isLocal: false // 标记为云端同步下来的资产
-                });
+              if (resolvedTitle && !finalSnippets.some(s => s.title === resolvedTitle && s.isLocal === false)) {
+                finalSnippets.push({ ...cSnippet, title: resolvedTitle, isLocal: false });
               }
             });
           }
         } catch (netErr) {
-          console.warn("⚠️ 云端网络资产同步失败，已降级至本地模式:", netErr);
+          console.warn("⚠️ 云端资产同步降级:", netErr);
+        } finally {
+          clearTimeout(timeout); // 👈 确保定时器被安全清除
         }
       }
 
-      // 3. 驱动 React 渲染轴
       setVfsLibs(finalLibs);
       setPublicSnippets(finalSnippets);
     } catch (err) {
-      console.error("VFS 管道刷新彻底崩溃:", err);
+      console.error("VFS 管道刷新崩溃:", err);
     } finally {
       if (isManual) setTimeout(() => setIsRefreshing(false), 300);
     }
-  }, []);
+  }, [isOnline]);
 
   useEffect(() => {
     // 使用 setTimeout 剥离出当前的同步调用栈
@@ -173,21 +193,110 @@ export default function App() {
     window.addEventListener('mouseup', onMouseUp);
   };
 
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    const startX = touch.clientX;
+    const startWidth = editorWidth; // 你存储编辑器宽度的状态
+
+    const handleTouchMove = (moveEvent: TouchEvent) => {
+      const currentTouch = moveEvent.touches[0];
+      const deltaX = currentTouch.clientX - startX;
+      // 根据拖拽位移更新宽度
+      setEditorWidth(Math.max(200, startWidth + deltaX)); 
+    };
+
+    const handleTouchEnd = () => {
+      document.removeEventListener('touchmove', handleTouchMove);
+      document.removeEventListener('touchend', handleTouchEnd);
+    };
+
+    // 💡 注意：移动端事件需要挂载到 document 上以保证滑出边界时依然流畅
+    document.addEventListener('touchmove', handleTouchMove, { passive: false });
+    document.addEventListener('touchend', handleTouchEnd);
+  };
   // WASM 编译器接入：处理无 @ 前缀的纯库名依赖加载
   const compileOutput = useMemo<WebCompileResult | null>(() => {
     if (!wasmReady) return null;
+
+    // 💡 声明一个外部错误拦截桶
+    let interceptedError: { message: string; line: number; column: number } | null = null;
+
     try {
-      return compile_for_web(code, (importString: string) => {
-        // 去掉可能存在的版本后缀，统一根据锁定版本策略加载
+      const nativeResult = compile_for_web(code, (importString: string) => {
         const [libName, requestedVersion] = importString.split('@');
-        const targetLib = vfsLibs.find(l => l.name === libName);
-        if (!targetLib) return "";
+        
+        // 优先去查找当前锁定的本地库镜像，如果找不到则查找未被覆盖的云端库
+        const targetLib = vfsLibs.find(l => l.name === libName && l.isLocal) || 
+                          vfsLibs.find(l => l.name === libName);
+
+        if (!targetLib) {
+          // 🛠️ 重点：不直接 throw 给 WASM，而是塞进外部闭包变量里
+          let errorLine = 1;
+          let errorColumn = 1;
+          const lines = code.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes(`@import`) && lines[i].includes(libName)) {
+              errorLine = i + 1;
+              errorColumn = lines[i].indexOf('@import') + 1;
+              break;
+            }
+          }
+          interceptedError = {
+            message: `[VFS LINK DISASTER]: 找不到指定的映射依赖项 "@import(${libName})"。`,
+            line: errorLine,
+            column: errorColumn
+          };
+          return ""; // 回传空字符串给 WASM 稳住它
+        }
+
         const versionToFetch = requestedVersion || targetLib.activeVersion;
-        return targetLib.versions[versionToFetch]?.code || "";
+        const finalCode = targetLib.versions[versionToFetch]?.code;
+
+        if (finalCode === undefined || finalCode === null) {
+          let errorLine = 1;
+          let errorColumn = 1;
+          const lines = code.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes(`@import`) && lines[i].includes(libName)) {
+              errorLine = i + 1;
+              errorColumn = lines[i].indexOf('@import') + 1;
+              break;
+            }
+          }
+          interceptedError = {
+            message: `[VFS VERSION MISMATCH]: 依赖项 "${libName}" 缺失请求的版本号 [v${versionToFetch}]。`,
+            line: errorLine,
+            column: errorColumn
+          };
+          return "";
+        }
+
+        return finalCode;
       }) as WebCompileResult;
-    } catch (e) {
-      console.error(e);
-      return { success: false, error_message: "WASM 执行崩溃" + e, blocks: {} };
+
+      // 💡 WASM 出来后，立刻检查有没有触发拦截
+      if (interceptedError) {
+        const err = interceptedError as { message: string; line: number; column: number }; // 让编译器和Linter不犯蠢
+        return {
+          success: false,
+          error_message: err.message,
+          blocks: {},
+          line: err.line,
+          column: err.column
+        } as any;
+      }
+
+      return nativeResult;
+
+    } catch (e: any) {
+      console.error("[CRITICAL WASM CRASH]:", e);
+      return { 
+        success: false, 
+        error_message: "WASM 引擎崩溃: " + (e?.message || e), 
+        blocks: {},
+        line: 1,
+        column: 1
+      } as any;
     }
   }, [code, wasmReady, vfsLibs]);
 
@@ -512,6 +621,7 @@ export default function App() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#121212', color: '#e0e0e0', position: 'fixed', top: 0, left: 0 }}>
       {/* 顶部状态栏 */}
       <div style={{ padding: '12px 24px', background: '#1a1a1a', borderBottom: '1px solid #2d2d2d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        {/* 左侧区域：标题与控制键 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#00ffb3' }}>ROP IDE 2nd</h2>
           <span style={{ fontSize: '12px', color: '#666', fontFamily: "'JetBrains Mono', monospace", fontWeight: 'bold', marginRight: '5px' }}>v{pkg.version}</span>
@@ -527,11 +637,24 @@ export default function App() {
           </button>
         </div>
         
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#111', padding: '4px 12px', borderRadius: '20px', border: '1px solid #222' }}>
-          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isOnline ? '#00ffb3' : '#ff5555', boxShadow: isOnline ? '0 0 8px #00ffb3' : '0 0 8px #ff5555' }} />
-          <span style={{ fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", color: isOnline ? '#aaa' : '#ff8888' }}>
-            {isOnline ? 'ONLINE' : 'OFFLINE'}
-          </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: 'auto' }}>
+          
+          {/* PWA 离线缓存就绪指示灯 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#111', padding: '4px 12px', borderRadius: '20px', border: '1px solid #222', flexShrink: 0 }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isPwaCached ? '#38bdf8' : '#eab308', boxShadow: isPwaCached ? '0 0 8px #38bdf8' : '0 0 8px #eab308' }} />
+            <span style={{ fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", color: isPwaCached ? '#aaa' : '#eab308' }}>
+              {isPwaCached ? 'OFFLINE_ASSETS_READY' : 'DOWNLOADING_ASSETS...'}
+            </span>
+          </div>
+
+          {/* 网络在线状态指示灯 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#111', padding: '4px 12px', borderRadius: '20px', border: '1px solid #222', flexShrink: 0 }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isOnline ? '#00ffb3' : '#ff5555', boxShadow: isOnline ? '0 0 8px #00ffb3' : '0 0 8px #ff5555' }} />
+            <span style={{ fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", color: isOnline ? '#aaa' : '#ff8888' }}>
+              {isOnline ? 'ONLINE' : 'OFFLINE'}
+            </span>
+          </div>
+
         </div>
       </div>
 
@@ -553,7 +676,7 @@ export default function App() {
           />
         </div>
 
-        <div onMouseDown={handleMouseDown} style={{ width: '6px', background: '#222', cursor: 'col-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
+        <div onMouseDown={handleMouseDown} onTouchStart={handleTouchStart} style={{ width: '6px', background: '#222', cursor: 'col-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
           <div style={{ width: '2px', height: '30px', background: '#444' }} />
         </div>
 

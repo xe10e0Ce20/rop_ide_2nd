@@ -8,10 +8,34 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate', // 当检测到新版本时自动更新 Service Worker
-      manifest: false,            // 如果只是纯粹要离线运行代码，不需要 PWA 的“添加至桌面”图标，可以设为 false
+      manifest: {
+        "short_name": "ROP IDE 2nd",
+        "name": "ROP IDE 2nd Edition",
+        "description": "2nd Edition ROP Web IDE with Offline Compiler Support",
+        "icons": [
+          {
+            "src": "icon.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any maskable"
+          },
+          {
+            "src": "icon.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+          }
+        ],
+        "start_url": "/",
+        "background_color": "#151515",
+        "theme_color": "#1a1a1a",
+        "display": "standalone",
+        "orientation": "any"
+      },
       workbox: {
         // 自动匹配并预缓存所有 Vite 编译出来的静态资源（HTML/JS/CSS/字体等）
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2,woff,ttf,wasm}']
+        globPatterns: ['**/*.{ts,js,css,html,ico,png,svg,woff2,woff,ttf,wasm}'],
+        maximumFileSizeToCacheInBytes: 12 * 1024 * 1024
       }
     })
   ]

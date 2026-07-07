@@ -31,11 +31,77 @@ export default function RopLibraryModal({
 
   if (!isOpen) return null;
 
+  // 1. 一键复制代码到剪贴板
   const handleCopyToClipboard = (code: string, label: string) => {
-    if (!code) return alert("无可复制的代码内容内容");
+    if (!code) return alert("无可复制的代码内容");
     navigator.clipboard.writeText(code)
       .then(() => alert(`📋 [${label}] 代码已成功复制到剪贴板！`))
       .catch(err => console.error("复制失败:", err));
+  };
+
+  // 2. 核心功能：将云端库/代码片段缓存至本地VFS（实现同名共存）
+  const handleCacheToLocal = async (sourceAsset: any, type: 'package' | 'snippet') => {
+    const activeVersion = sourceAsset.activeVersion;
+    const versionData = sourceAsset.versions[activeVersion];
+    
+    if (!versionData) return alert("无法获取该资产当前版本的源码，缓存失败。");
+
+    if (type === 'package') {
+      // 检查本地 VFS 是否存在绝对同名的原生本地库
+      let targetName = sourceAsset.name;
+      const hasConflict = vfsLibs.some(l => l.name === targetName && l.isLocal);
+      
+      if (hasConflict) {
+        // 如果名字冲突，采用重命名 Namespace 策略实现完美共存
+        targetName = `${sourceAsset.name}_cloud_cached`;
+        alert(`提示：由于本地已存在原生的 "${sourceAsset.name}" 库，云端缓存将重命名为 "${targetName}" 以防冲突共存。`);
+      }
+
+      const cachedLib: ManagedLib = {
+        name: targetName,
+        author: sourceAsset.author || "Cloud",
+        description: `[云端离线缓存] ${sourceAsset.description || ''}`,
+        isLocal: true, // 写入本地 VFS
+        activeVersion: activeVersion,
+        versions: {
+          [activeVersion]: {
+            version: activeVersion,
+            code: versionData.code,
+            updatedAt: Date.now()
+          }
+        }
+      };
+
+      await saveVFSLib(cachedLib);
+      alert(`📥 依赖库 [${targetName}] v${activeVersion} 已成功持久化至本地离线 VFS！`);
+    } else {
+      let targetTitle = sourceAsset.title;
+      const hasConflict = publicSnippets.some(s => s.title === targetTitle && s.isLocal);
+      
+      if (hasConflict) {
+        targetTitle = `${sourceAsset.title}_cloud_cached`;
+        alert(`提示：由于本地已存在原生代码片段 [${sourceAsset.title}]，云端快照将重命名为 [${targetTitle}] 以防冲突共存。`);
+      }
+
+      const cachedSnippet: PublicSnippet = {
+        title: targetTitle,
+        author: sourceAsset.author || "Cloud",
+        description: `[云端离线缓存] ${sourceAsset.description || ''}`,
+        isLocal: true, // 标记为本地工作区资产
+        activeVersion: activeVersion,
+        versions: {
+          [activeVersion]: {
+            version: activeVersion,
+            code: versionData.code,
+            updatedAt: Date.now()
+          }
+        }
+      };
+
+      await savePublicSnippet(cachedSnippet);
+      alert(`📥 代码片段 [${targetTitle}] v${activeVersion} 已成功克隆至本地代码仓！`);
+    }
+    onUpdateVfs(); // 触发 VFS 视图重载
   };
 
   const handleSaveOrPublish = async (e: React.FormEvent) => {
@@ -71,9 +137,6 @@ export default function RopLibraryModal({
           });
 
           const responseText = await res.text();
-          console.log("📦 后端响应全文:", responseText);
-          console.log("📦 响应状态:", res.status, "ok:", res.ok);
-
           if (res.status >= 200 && res.status < 300) {
             alert(`🎉 云端发布成功！响应: ${responseText.substring(0, 50)}`);
             onUpdateVfs();
@@ -90,7 +153,7 @@ export default function RopLibraryModal({
     else {
       const existing = publicSnippets.find(s => s.title === targetName);
       if (existing && existing.versions[targetVersion]) {
-        return alert(`、代码片段 [${targetName}] 已经锁定了版本号 v${targetVersion}`);
+        return alert(`代码片段 [${targetName}] 已经锁定了版本号 v${targetVersion}`);
       }
 
       if (isLocalMode) {
@@ -143,7 +206,6 @@ export default function RopLibraryModal({
     if (!activeVerData) return alert("当前选择的版本快照数据损坏或为空");
 
     const message = `这会将 [${snippet.title}] v${snippet.activeVersion} 覆盖您的工作区内容，确定要继续吗？`;
-    
     if (confirm(message)) {
       onOverwriteWorkarea(activeVerData.code);
       onClose(); 
@@ -163,7 +225,7 @@ export default function RopLibraryModal({
         {/* 顶部大类切换 */}
         <div style={{ display: 'flex', background: '#111', borderBottom: '1px solid #2d2d2d', padding: '0 20px' }}>
           <button onClick={() => setAssetType('package')} style={{ background: 'none', border: 'none', borderBottom: assetType === 'package' ? '2px solid #00ffb3' : '2px solid transparent', color: assetType === 'package' ? '#00ffb3' : '#777', padding: '12px 20px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>📦 依赖库 (Packages/Imports)</button>
-          <button onClick={() => setAssetType('snippet')} style={{ background: 'none', border: 'none', borderBottom: assetType === 'snippet' ? '2px solid #38bdf8' : '2px solid transparent', color: assetType === 'snippet' ? '#38bdf8' : '#777', padding: '12px 20px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>📄 代码 (Code Snippets)</button>
+          <button onClick={() => setAssetType('snippet')} style={{ background: 'none', border: 'none', borderBottom: assetType === 'snippet' ? '2px solid #38bdf8' : '2px solid transparent', color: assetType === 'snippet' ? '#38bdf8' : '#777', padding: '12px 20px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>📄 公开代码 (Standalone Snippets)</button>
         </div>
 
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
@@ -202,10 +264,10 @@ export default function RopLibraryModal({
             
             {/* 依赖库渲染轴 */}
             {assetType === 'package' && vfsLibs.map(lib => (
-              <div key={lib.name} style={{ background: '#111', border: '1px solid #222', borderRadius: '6px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div key={`${lib.name}@${lib.isLocal ? 'local' : 'cloud'}`} style={{ background: '#111', border: '1px solid #222', borderRadius: '6px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <span style={{ color: lib.isLocal ? '#ffd700' : '#38bdf8', fontSize: '11px', marginRight: '6px' }}>{lib.isLocal ? '● LOCAL_LIB' : '● CLOUD_LIB'}</span>
+                    <span style={{ color: lib.isLocal ? '#ffd700' : '#38bdf8', fontSize: '11px', marginRight: '6px' }}>{lib.isLocal ? '● LOCAL_LIB' : '● CACHED_LIB'}</span>
                     <strong style={{ color: '#fff', fontSize: '14px' }}>{lib.name}</strong>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -221,6 +283,12 @@ export default function RopLibraryModal({
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <button type="button" onClick={() => handleCopyToClipboard(lib.versions[lib.activeVersion]?.code || '', lib.name)} style={{ background: '#222', border: '1px solid #333', color: '#e0e0e0', padding: '3px 8px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer' }}>📋 复制代码</button>
                     <button type="button" onClick={() => onDirectViewLib(lib)} style={{ background: '#222', border: '1px solid #333', color: '#aaa', padding: '3px 8px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer' }}>📃 查看源码</button>
+                    
+                    {/* 如果是云端库，提供一键缓存到本地选项，且不影响原有任何功能 */}
+                    {!lib.isLocal && (
+                      <button type="button" onClick={() => handleCacheToLocal(lib, 'package')} style={{ background: '#222', border: '1px solid #22d3ee', color: '#22d3ee', padding: '3px 8px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>📥 缓存至本地</button>
+                    )}
+                    
                     {lib.isLocal && (
                       <button type="button" onClick={async () => { if(confirm(`确定删除依赖库 [ ${lib.name} ] ？`)) { await deleteVFSLib(lib.name); onUpdateVfs(); } }} style={{ background: 'transparent', border: 'none', color: '#ef4444', padding: '3px 4px', fontSize: '11px', cursor: 'pointer' }}>[删除]</button>
                     )}
@@ -230,7 +298,7 @@ export default function RopLibraryModal({
             ))}
 
             {assetType === 'snippet' && publicSnippets.map(snippet => (
-              <div key={snippet.title} style={{ background: '#111', border: '1px solid #222', borderRadius: '6px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div key={`${snippet.title}@${snippet.isLocal ? 'local' : 'cloud'}`} style={{ background: '#111', border: '1px solid #222', borderRadius: '6px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
                     <span style={{ color: snippet.isLocal ? '#ffd700' : '#a855f7', fontSize: '11px', marginRight: '6px', fontWeight: 'bold' }}>
@@ -254,6 +322,12 @@ export default function RopLibraryModal({
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <button type="button" onClick={() => handleCopyToClipboard(snippet.versions[snippet.activeVersion]?.code || '', snippet.title)} style={{ background: '#222', border: '1px solid #333', color: '#e0e0e0', padding: '3px 8px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer' }}>📋 复制代码</button>
                     <button type="button" onClick={() => triggerImportSnippet(snippet)} style={{ background: '#222', border: '1px solid #333', color: '#00ffb3', padding: '3px 8px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>⚡ 载入并覆写当前工作区</button>
+                    
+                    {/* 如果是云端快照，提供同步缓存至本地持久层选项 */}
+                    {!snippet.isLocal && (
+                      <button type="button" onClick={() => handleCacheToLocal(snippet, 'snippet')} style={{ background: '#222', border: '1px solid #c084fc', color: '#c084fc', padding: '3px 8px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>📥 缓存至本地</button>
+                    )}
+
                     {snippet.isLocal ? (
                       <button type="button" onClick={async () => { if(confirm(`确定从工作区彻底注销公开代码 [ ${snippet.title} ] ？`)) { await deletePublicSnippet(snippet.title); onUpdateVfs(); } }} style={{ background: 'transparent', border: 'none', color: '#ef4444', padding: '3px 4px', fontSize: '11px', cursor: 'pointer' }}>[删除]</button>
                     ) : (
