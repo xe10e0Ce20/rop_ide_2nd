@@ -5,6 +5,7 @@ import { ROP_LANG_ID, languageDef, configDef } from './ropLanguage';
 import { createRopCompletionProvider, createRopHoverProvider, createRopDefinitionProvider } from './ropCompletion';
 import type { WebCompileResult, AutocompleteMeta } from './types';
 import RopLibraryModal from './components/RopLibraryModal';
+import RopInfoModal from './components/RopInfoModal';
 import { getAllVFSLibs, getAllPublicSnippets, saveVFSLib, deleteVFSLib } from './utils/vfs';
 import type { ManagedLib, PublicSnippet, LibVersion } from './utils/vfs';
 
@@ -38,7 +39,10 @@ export default function App() {
   const [isOnline, setIsOnline] = useState<boolean>(() => navigator.onLine);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
+  const [cloudVersion, setCloudVersion] = useState<string>('loading...');
+
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [isInfoOpen, setIsInfoOpen] = useState<boolean>(false);
   const [vfsLibs, setVfsLibs] = useState<ManagedLib[]>([]);
   const [publicSnippets, setPublicSnippets] = useState<PublicSnippet[]>([]);
   const vfsLibsRef = useRef<ManagedLib[]>([]);
@@ -53,6 +57,59 @@ export default function App() {
   const compileOutputRef = useRef<WebCompileResult | null>(null);
   const spanMapRef = useRef<Record<string, [number, number, number, number][]>>({});
   const activeBlockRef = useRef<string | null>(null);
+
+  const fetchCloudVersion = useCallback(async () => {
+    try {
+      // 💡 请求 public/version 物理文件，加时间戳破掉 SW/浏览器缓存
+      const response = await fetch(`/version?t=${Date.now()}`, {
+        method: 'GET',
+        cache: 'no-store',
+        headers: {
+          'Pragma': 'no-cache',
+          'Cache-Control': 'no-cache'
+        }
+      });
+
+      if (response.ok) {
+        const text = await response.text();
+        setCloudVersion(text.trim()); // 👈 直接拿纯文本，trim 掉可能存在的换行符
+      } else {
+        setCloudVersion('UNKNOWN');
+      }
+    } catch (err) {
+      console.warn("获取云端静态版本失败:", err);
+      setCloudVersion('OFFLINE');
+    }
+  }, []);
+
+  useEffect(() => {
+  // 💡 在 Effect 内部直接声明或包裹异步逻辑
+  const loadCloudVersion = async () => {
+    try {
+      const response = await fetch(`/version?t=${Date.now()}`, {
+        method: 'GET',
+        cache: 'no-store',
+        headers: {
+          'Pragma': 'no-cache',
+          'Cache-Control': 'no-cache'
+        }
+      });
+
+      if (response.ok) {
+        const text = await response.text();
+        setCloudVersion(text.trim());
+      } else {
+        setCloudVersion('UNKNOWN');
+      }
+    } catch (err) {
+      console.warn("获取云端静态版本失败:", err);
+      setCloudVersion('OFFLINE');
+    }
+  };
+
+  loadCloudVersion();
+  // 💡 保持依赖项数组为空（[]），使其只在组件挂载时无副作用地执行一次
+}, []);
 
   useEffect(() => {
     vfsLibsRef.current = vfsLibs;
@@ -624,7 +681,27 @@ export default function App() {
         {/* 左侧区域：标题与控制键 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#00ffb3' }}>ROP IDE 2nd</h2>
-          <span style={{ fontSize: '12px', color: '#666', fontFamily: "'JetBrains Mono', monospace", fontWeight: 'bold', marginRight: '5px' }}>v{pkg.version}</span>
+          
+          {/* 版本流展示区域 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", fontWeight: 'bold' }}>
+            {/* 本地代码版本 */}
+            <span style={{ color: '#909090' }}>LOCAL:{pkg.version}</span>
+            
+            {/* 分隔符 */}
+            <span style={{ color: '#333' }}>/</span>
+            
+            {/* 云端最新版本 */}
+            <span style={{ 
+              color: cloudVersion === 'loading...' ? '#666' : (cloudVersion === pkg.version ? '#38bdf8' : '#ff5555'),
+              background: cloudVersion !== 'loading...' && cloudVersion !== pkg.version ? 'rgba(255, 85, 85, 0.15)' : 'transparent',
+              padding: cloudVersion !== 'loading...' && cloudVersion !== pkg.version ? '2px 6px' : '0',
+              borderRadius: '4px',
+              border: cloudVersion !== 'loading...' && cloudVersion !== pkg.version ? '1px solid rgba(255, 85, 85, 0.3)' : 'none',
+              transition: 'all 0.3s'
+            }}>
+              CLOUD:{cloudVersion}
+            </span>
+          </div>
           
           <button 
             type="button"
@@ -634,6 +711,16 @@ export default function App() {
             onMouseLeave={(e) => e.currentTarget.style.background = '#222'}
           >
             📦 公共库/Global Library
+          </button>
+
+          <button 
+            type="button"
+            onClick={() => setIsInfoOpen(true)}
+            style={{ background: '#222', border: '1px solid #333', color: '#38bdf8', padding: '4px 12px', fontSize: '12px', fontFamily: "'JetBrains Mono', monospace", borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', transition: 'all 0.2s' }}
+            onMouseEnter={(e) => e.currentTarget.style.background = '#2a2a2a'}
+            onMouseLeave={(e) => e.currentTarget.style.background = '#222'}
+          >
+            📰 信息/Notes
           </button>
         </div>
         
@@ -811,6 +898,11 @@ export default function App() {
         onOverwriteWorkarea={(freshCode) => {
           setCode(freshCode); 
         }}
+      />
+      <RopInfoModal 
+        isOpen={isInfoOpen} 
+        onClose={() => setIsInfoOpen(false)} 
+        pwaVersion={pkg.version} 
       />
     </div>
   );

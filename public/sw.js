@@ -45,6 +45,10 @@ self.addEventListener('fetch', (event) => {
         return cachedResponse;
       }
 
+      if (url.pathname.endsWith('/version')) {
+        return event.respondWith(fetch(event.request)); // Network Only
+      }
+
       // 如果是导航请求（用户刷新了其他子路由如 /settings），且缓存未命中
       // 需要强行回退到 index.html（SPA 单页应用的离线路由关键）
       if (event.request.mode === 'navigate') {
