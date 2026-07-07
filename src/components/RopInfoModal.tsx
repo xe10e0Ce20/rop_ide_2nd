@@ -36,8 +36,8 @@ export default function RopInfoModal({ isOpen, onClose, pwaVersion = pkg.version
           
           {/* GitHub Repositories */}
           <h3 style={{ margin: '0 0 8px 0', color: '#fff', fontSize: '15px', textAlign: 'left' }}> 源码仓库 / GitHub Repositories</h3>
-          <h3 style={{ margin: '0 0 8px 0', color: '#fff', fontSize: '14px', textAlign: 'left' }}> 欢迎来仓库提Issue，贡献代码！</h3>
-          <h3 style={{ margin: '0 0 8px 0', color: '#5f5f5f', fontSize: '8px', textAlign: 'left' }}> 不要畏惧使用AI，因为本项目也基于vibe coding开发</h3>
+          <h3 style={{ margin: '0 0 8px 0', color: '#fff', fontSize: '14px', textAlign: 'left' }}> 欢迎来仓库提Issue（大到程序崩溃，小到错别字都可以），贡献Pull Requests（代码优化，新增功能，修复bug，教程文档，错别字修复都可以）！</h3>
+          <h3 style={{ margin: '0 0 8px 0', color: '#5f5f5f', fontSize: '8px', textAlign: 'left' }}> 请大胆使用AI，因为本项目也基于vibe coding开发</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '8px 0 20px 0', textAlign: 'left' }}>
             <div>
               <span style={{ fontSize: '12px', color: '#888', display: 'block', marginBottom: '2px' }}>IDE WORKSPACE:</span>
@@ -92,7 +92,7 @@ export default function RopInfoModal({ isOpen, onClose, pwaVersion = pkg.version
           <div style={{ marginBottom: '8px', textAlign: 'left' }}>
             <div style={{ color: '#38bdf8', fontWeight: 'bold', fontSize: '13px', fontFamily: "'JetBrains Mono', monospace" }}>v0.0.1 (Current)</div>
             <ul style={{ margin: '4px 0 0 0', paddingLeft: '20px', color: '#ccc', textAlign: 'left' }}>
-              <li style={{ marginBottom: '4px' }}>Initial Release // 系统初次构建完成。</li>
+              <li style={{ marginBottom: '4px' }}>Initial Release // 系统初次构建完成。预发行版本。</li>
             </ul>
           </div>
 

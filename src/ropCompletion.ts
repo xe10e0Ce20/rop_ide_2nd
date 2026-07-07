@@ -153,12 +153,6 @@ export function createRopCompletionProvider(
             cleanGlobalContent += model.getLineContent(i) + '\n';
           }
         }
-        // 提取 block 名称作为标签
-        const blockNameRegex = /\bblock\s+([a-zA-Z_]\w*)\s*\{/g;
-        let blockMatch;
-        while ((blockMatch = blockNameRegex.exec(cleanGlobalContent)) !== null) {
-          if (!foundLabels.includes(blockMatch[1])) foundLabels.push(blockMatch[1]);
-        }
         // 提取普通标签
         const labelRegex = /\b([a-zA-Z_]\w*):/g;
         let match;

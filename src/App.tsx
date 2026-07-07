@@ -4,10 +4,12 @@ import type { Monaco } from '@monaco-editor/react';
 import { ROP_LANG_ID, languageDef, configDef } from './ropLanguage';
 import { createRopCompletionProvider, createRopHoverProvider, createRopDefinitionProvider } from './ropCompletion';
 import type { WebCompileResult, AutocompleteMeta } from './types';
-import RopLibraryModal from './components/RopLibraryModal';
-import RopInfoModal from './components/RopInfoModal';
 import { getAllVFSLibs, getAllPublicSnippets, saveVFSLib, deleteVFSLib } from './utils/vfs';
 import type { ManagedLib, PublicSnippet, LibVersion } from './utils/vfs';
+
+import RopLibraryModal from './components/RopLibraryModal';
+import RopInfoModal from './components/RopInfoModal';
+import { RopTutorialModal } from './components/RopTutorialModal';
 
 import initWasm, { compile_for_web, get_autocomplete_metadata } from './wasm_pkg/rop_compiler';
 import pkg from '../package.json';
@@ -43,6 +45,8 @@ export default function App() {
 
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [isInfoOpen, setIsInfoOpen] = useState<boolean>(false);
+  const [isTutorialOpen, setIsTutorialOpen] = useState<boolean>(false);
+
   const [vfsLibs, setVfsLibs] = useState<ManagedLib[]>([]);
   const [publicSnippets, setPublicSnippets] = useState<PublicSnippet[]>([]);
   const vfsLibsRef = useRef<ManagedLib[]>([]);
@@ -247,43 +251,57 @@ export default function App() {
   useEffect(() => { localStorage.setItem(LOCAL_STORAGE_KEY, code); }, [code]);
   useEffect(() => { initWasm().then(() => setWasmReady(true)).catch(err => console.error("WASM 加载失败:", err)); }, []);
 
+  // 💡 声明一个统一的拖拽状态
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+
   const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault(); // 👈 阻止默认行为，防止拖动时误选文字
+    setIsDragging(true); // 👈 标记开始拖拽
+
     const startX = e.clientX;
     const startWidth = editorWidth;
+
     const onMouseMove = (moveEvent: MouseEvent) => {
+      // 动态计算百分比
       const delta = ((moveEvent.clientX - startX) / window.innerWidth) * 100;
       setEditorWidth(Math.min(Math.max(startWidth + delta, 20), 80));
     };
+
     const onMouseUp = () => {
+      setIsDragging(false); // 👈 拖拽结束
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
     };
+
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
+    // 移动端防选中与页面滚动
+    if (e.cancelable) e.preventDefault(); 
+    setIsDragging(true);
+
     const touch = e.touches[0];
     const startX = touch.clientX;
-    const startWidth = editorWidth; // 你存储编辑器宽度的状态
+    // 统一移动端逻辑：如果是百分比，采用与 PC 类似的算法，这里假设你想统一成百分比控制：
+    const startWidth = editorWidth; 
 
     const handleTouchMove = (moveEvent: TouchEvent) => {
       const currentTouch = moveEvent.touches[0];
-      const deltaX = currentTouch.clientX - startX;
-      // 根据拖拽位移更新宽度
-      setEditorWidth(Math.max(200, startWidth + deltaX)); 
+      const delta = ((currentTouch.clientX - startX) / window.innerWidth) * 100;
+      setEditorWidth(Math.min(Math.max(startWidth + delta, 20), 80));
     };
 
     const handleTouchEnd = () => {
+      setIsDragging(false);
       document.removeEventListener('touchmove', handleTouchMove);
       document.removeEventListener('touchend', handleTouchEnd);
     };
 
-    // 💡 注意：移动端事件需要挂载到 document 上以保证滑出边界时依然流畅
     document.addEventListener('touchmove', handleTouchMove, { passive: false });
     document.addEventListener('touchend', handleTouchEnd);
   };
-  // WASM 编译器接入：处理无 @ 前缀的纯库名依赖加载
   // WASM 编译器接入：精准匹配 Rust 层 fetch_lib_fn(lib_name)
   const compileOutput = useMemo<WebCompileResult | null>(() => {
     if (!wasmReady) return null;
@@ -737,6 +755,16 @@ export default function App() {
           >
             📰 信息/Notes
           </button>
+
+          <button 
+            type="button"
+            onClick={() => setIsTutorialOpen(true)}
+            style={{ background: '#222', border: '1px solid #333', color: '#38bdf8', padding: '4px 12px', fontSize: '12px', fontFamily: "'JetBrains Mono', monospace", borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', transition: 'all 0.2s' }}
+            onMouseEnter={(e) => e.currentTarget.style.background = '#2a2a2a'}
+            onMouseLeave={(e) => e.currentTarget.style.background = '#222'}
+          >
+            📖 教程/Tutorial
+          </button>
         </div>
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: 'auto' }}>
@@ -778,8 +806,44 @@ export default function App() {
           />
         </div>
 
-        <div onMouseDown={handleMouseDown} onTouchStart={handleTouchStart} style={{ width: '6px', background: '#222', cursor: 'col-resize', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10 }}>
-          <div style={{ width: '2px', height: '30px', background: '#444' }} />
+        {/* 优化后的中央分割线 */}
+        <div 
+          onMouseDown={handleMouseDown} 
+          onTouchStart={handleTouchStart} 
+          style={{ 
+            width: '10px',
+            margin: '0 -2px',           // 负 margin 产生隐形热区，完全不撑开/破坏两边编辑器的原有像素位置
+            background: isDragging ? '#1fd8a1' : '#222', // 👈 核心：由状态驱动背景色，快速滑动绝不熄灭
+            cursor: 'col-resize',       
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center', 
+            zIndex: 10,
+            transition: 'background 0.2s ease, box-shadow 0.2s ease',
+            boxShadow: isDragging ? '0 0 8px #1fd8a1' : 'none', // 选中时带有一层极轻的荧光外发光
+          }}
+          // 仅在非拖拽状态下响应普通的 Hover
+          onMouseEnter={(e) => {
+            if (!isDragging) {
+              e.currentTarget.style.background = '#333';
+              e.currentTarget.style.boxShadow = '0 0 0 1px #444';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!isDragging) {
+              e.currentTarget.style.background = '#222';
+              e.currentTarget.style.boxShadow = 'none';
+            }
+          }}
+        >
+          {/* 中间的装饰刻度线 */}
+          <div style={{ 
+            width: '2px', 
+            height: '30px', 
+            background: isDragging ? '#000' : '#444', // 激活时装饰线变暗，反衬亮色底
+            pointerEvents: 'none',
+            transition: 'background 0.2s ease'
+          }} />
         </div>
 
         <div style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', background: '#0d0d0d' }}>
@@ -919,18 +983,16 @@ export default function App() {
         onClose={() => setIsInfoOpen(false)} 
         pwaVersion={pkg.version} 
       />
+      <RopTutorialModal 
+        isOpen={isTutorialOpen} 
+        onClose={() => setIsTutorialOpen(false)} 
+      />
     </div>
   );
 }
 
 function getSampleCode(): string {
-  return `@import(std_io)
-
+  return `
 @offset(0xd710)
-block main {
-    @filler(3)
-    .. 11 22 33        
-    
-    call_gadget(0x123456)
-}`;
+block main {}`;
 }
