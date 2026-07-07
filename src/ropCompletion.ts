@@ -90,7 +90,10 @@ function extractMacroDocFromSource(source: string, macroName: string): string[] 
 }
 
 // ==================== 1. 自动补全提供者 ====================
-export function createRopCompletionProvider(getWasmMetadata: (code: string) => AutocompleteMeta) {
+export function createRopCompletionProvider(
+  getWasmMetadata: (code: string) => AutocompleteMeta,
+  getAvailableLibs?: () => string[]
+) {
   return {
     triggerCharacters: ['@', '&', '_', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'm', 'p', 's', 'r'],
     provideCompletionItems: (model: any, position: any) => {
@@ -102,6 +105,23 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
         startColumn: wordInfo.startColumn,
         endColumn: wordInfo.endColumn
       };
+
+      const textUntilPosition = model.getValueInRange({
+        startLineNumber: 1, startColumn: 1,
+        endLineNumber: position.lineNumber, endColumn: position.column
+      });
+      const isInsideImport = /@import\s*\(\s*[^)]*$/.test(textUntilPosition);
+
+      if (isInsideImport && getAvailableLibs) {
+        const suggestions = getAvailableLibs().map(lib => ({
+          label: lib,
+          kind: monaco.languages.CompletionItemKind.Module,
+          insertText: lib,
+          detail: 'VFS Library',
+          range
+        }));
+        return { suggestions };
+      }
 
       const staticKeywords = ['def', 'block', 'yield'];
       const builtInFields = ['@offset', '@filler', '@import'];
@@ -165,8 +185,24 @@ export function createRopCompletionProvider(getWasmMetadata: (code: string) => A
       builtInFields.forEach(field => {
         if (!seenLabels.has(field)) {
           seenLabels.add(field);
-          const cleanText = field.startsWith('@') ? field.slice(1) : field;
-          suggestions.push({ label: field, kind: Kind.Function, insertText: hasAtPrefix ? cleanText : field, filterText: hasAtPrefix ? cleanText : field, detail: 'Built-in Annotation', range });
+          
+          const baseText = field.startsWith('@') ? field.slice(1) : field;
+          const tokenText = hasAtPrefix ? baseText : field;
+          const insertText = `${tokenText}()`;
+
+          // 💡 核心修复：如果是以 @ 触发的，过滤纯文本；如果是普通输入，必须用带 @ 的原字段过滤
+          // 这样既能保证输入 '@' 时完美过滤，又不会在输入普通字母时干扰到下方的宏补全匹配
+          const finalFilterText = hasAtPrefix ? baseText : field;
+
+          suggestions.push({ 
+            label: field, 
+            kind: Kind.Function, 
+            insertText: insertText,
+            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            filterText: finalFilterText, // 👈 使用动态分流的过滤文本
+            detail: 'Built-in Annotation', 
+            range 
+          });
         }
       });
 

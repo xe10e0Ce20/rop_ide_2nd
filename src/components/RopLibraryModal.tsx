@@ -253,7 +253,7 @@ export default function RopLibraryModal({
             
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #222', paddingBottom: '6px' }}>
               <div style={{ fontSize: '12px', color: '#888' }}>
-                当前视图：{assetType === 'package' ? `可用文件映像 (${vfsLibs.length})` : `内部独立代码快照 (${publicSnippets.length})`}
+                当前视图：{assetType === 'package' ? `可用文件映像 (${vfsLibs.length}) 注：强烈建议先将要用的库缓存至本地！` : `内部独立代码快照 (${publicSnippets.length})`}
               </div>
               {onManualRefresh && (
                 <button type="button" onClick={onManualRefresh} disabled={isRefreshing} style={{ background: '#222', border: '1px solid #333', color: isRefreshing ? '#555' : '#00ffb3', padding: '2px 10px', fontSize: '11px', borderRadius: '4px', cursor: isRefreshing ? 'not-allowed' : 'pointer' }}>

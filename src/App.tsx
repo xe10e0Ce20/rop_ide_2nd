@@ -284,22 +284,20 @@ export default function App() {
     document.addEventListener('touchend', handleTouchEnd);
   };
   // WASM 编译器接入：处理无 @ 前缀的纯库名依赖加载
+  // WASM 编译器接入：精准匹配 Rust 层 fetch_lib_fn(lib_name)
   const compileOutput = useMemo<WebCompileResult | null>(() => {
     if (!wasmReady) return null;
 
-    // 💡 声明一个外部错误拦截桶
     let interceptedError: { message: string; line: number; column: number } | null = null;
 
     try {
-      const nativeResult = compile_for_web(code, (importString: string) => {
-        const [libName, requestedVersion] = importString.split('@');
-        
-        // 优先去查找当前锁定的本地库镜像，如果找不到则查找未被覆盖的云端库
+      const nativeResult = compile_for_web(code, (libName: string) => {
+        // 💡 遵循 Rust 接口规范：此处接收到的 libName 为纯库名字符串
+        // 优先查找被锁定的本地 VFS 镜像，找不到则查找云端同步镜像
         const targetLib = vfsLibs.find(l => l.name === libName && l.isLocal) || 
                           vfsLibs.find(l => l.name === libName);
 
         if (!targetLib) {
-          // 🛠️ 重点：不直接 throw 给 WASM，而是塞进外部闭包变量里
           let errorLine = 1;
           let errorColumn = 1;
           const lines = code.split('\n');
@@ -315,10 +313,11 @@ export default function App() {
             line: errorLine,
             column: errorColumn
           };
-          return ""; // 回传空字符串给 WASM 稳住它
+          return ""; 
         }
 
-        const versionToFetch = requestedVersion || targetLib.activeVersion;
+        // 💡 因为 Rust 语法不显式传递版本，默认使用用户在 VFS 中指定的 activeVersion
+        const versionToFetch = targetLib.activeVersion;
         const finalCode = targetLib.versions[versionToFetch]?.code;
 
         if (finalCode === undefined || finalCode === null) {
@@ -333,7 +332,7 @@ export default function App() {
             }
           }
           interceptedError = {
-            message: `[VFS VERSION MISMATCH]: 依赖项 "${libName}" 缺失请求的版本号 [v${versionToFetch}]。`,
+            message: `[VFS VERSION MISMATCH]: 依赖项 "${libName}" 缺失活动版本号 [v${versionToFetch}]。`,
             line: errorLine,
             column: errorColumn
           };
@@ -524,7 +523,7 @@ export default function App() {
     // 获取增强源码（匹配标准 `@import(std_io)` 去掉 @ 前缀库查找逻辑）
     const getAugmentedSourceForMetadata = (src: string): string => {
       const lines = src.split('\n');
-      const importPattern = /^@import\s*\(\s*([a-zA-Z_]\w*)(?:@([\w.]+))?\s*\)\s*$/;
+      const importPattern = /^@import\s*\(\s*([a-zA-Z_]\w*)\s*\)(?:\s*\/\/.*)?\s*$/;
       let augmented = src;
       for (const line of lines) {
         const match = line.trim().match(importPattern);
@@ -546,10 +545,14 @@ export default function App() {
       return get_autocomplete_metadata(augmentedSource) as AutocompleteMeta;
     };
 
-    // 自动补全
+    const getAvailableLibNames = (): string[] => {
+      return vfsLibsRef.current.map(lib => lib.name);
+    };
+
+    // 自动补全 (传入两个回调，分别用于宏/内建提示解析，以及 @import 库名补全提示)
     monaco.languages.registerCompletionItemProvider(
       ROP_LANG_ID,
-      createRopCompletionProvider(getAutocompleteMetaWithLibs)
+      createRopCompletionProvider(getAutocompleteMetaWithLibs, getAvailableLibNames)
     );
 
     // 辅助函数：获取 def 区间
@@ -820,7 +823,7 @@ export default function App() {
               {compileOutput && !compileOutput.success && (
                 <div style={{ background: '#140c0c', border: '1px solid #5a2323', borderRadius: '6px', overflow: 'hidden' }}>
                   <div style={{ background: '#2c1616', padding: '6px 14px', fontSize: '12px', color: '#ff8888', fontWeight: 'bold' }}>⚠️ COMPILATION_FAILED</div>
-                  <pre style={{ margin: 0, padding: '16px', fontSize: '13px', lineHeight: '1.6', color: '#f8f8f2', whiteSpace: 'pre-wrap', textAlign: 'left', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Hiragino Sans GB", "Microsoft YaHei", sans-serif'}}>
+                  <pre style={{ margin: 0, padding: '16px', fontSize: '13px', lineHeight: '1.6', color: '#f8f8f2', whiteSpace: 'pre-wrap', textAlign: 'left', fontFamily: 'Consolas, "Microsoft YaHei", sans-serif'}}>
                     {compileOutput.error_message}
                   </pre>
                 </div>
