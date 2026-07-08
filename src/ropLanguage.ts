@@ -14,8 +14,6 @@ export const languageDef = {
             // 2. 0x 十六进制长地址常数
             [/0x[0-9a-fA-F.]+/, 'rop.hex'],
 
-            [/@import\s*\([^)]*\)/, 'rop.directive'],
-
             // 3. @ 指令体系
             [/@[a-zA-Z_]\w*/, {
                 cases: {
