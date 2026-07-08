@@ -7,28 +7,32 @@ declare const monaco: {
 };
 
 /**
- * 获取光标所在位置的完整宏名（支持 $ 开头，后跟任意非空格非 '(' 字符）。
- * 返回完整的宏名字符串，或在光标未处于任何 $ 宏名内时返回 null。
+ * 💡 终极增强版光标标识符提取：完全脱离 Monaco 单词规则的控制
+ * 以光标为中心向左右双向辐射，精准抓取不含空格和左括号的完整宏名字符串
  */
 function getFullMacroNameAtCursor(model: any, position: any): string | null {
   const line = model.getLineContent(position.lineNumber);
   const col = position.column - 1; // 转为 0-based
   if (col < 0 || col >= line.length) return null;
 
-  // 正则：匹配以 $ 开头，后跟任意非空格、非 '(' 的字符序列
-  const macroRegex = /\$[^\s(]+/g;
-  let match;
-  while ((match = macroRegex.exec(line)) !== null) {
-    const start = match.index;
-    const end = start + match[0].length;
-    if (col >= start && col < end) {
-      return match[0];
-    }
+  // 如果当前光标处于空格或括号上，直接返回空
+  if (/[\s()]/.test(line.charAt(col))) return null;
+
+  // 向左寻找边界（直到遇到空格或左括号）
+  let start = col;
+  while (start > 0 && !/[\s(]/.test(line.charAt(start - 1))) {
+    start--;
   }
 
-  // 如果没有匹配，可能是普通宏（非 $ 开头），回退到 Monaco 的单词检测
-  const wordInfo = model.getWordAtPosition(position);
-  return wordInfo ? wordInfo.word : null;
+  // 向右寻找边界（直到遇到空格或左括号）
+  let end = col;
+  while (end < line.length && !/[\s(]/.test(line.charAt(end))) {
+    end++;
+  }
+
+  const word = line.substring(start, end).trim();
+  // 过滤清洗掉尾部可能误连带的标点符号
+  return word ? word.replace(/[),;]+$/, '') : null;
 }
 
 // 稳健的 def 区间提取（支持跨行 def 声明、含默认值的参数、$ 宏名）
@@ -87,21 +91,29 @@ function getMacroParamNames(meta: AutocompleteMeta, macroName: string): string[]
 }
 
 /**
- * 判断某行是否定义了指定宏名（不依赖正则，纯字符串扫描）。
- * 适用于包含任意特殊字符的宏名。
+ * 💡 终极稳健的 def 行匹配器：纯前缀边界判定
+ * 免疫一切 \r\n 换行符污染，完美兼容末尾紧跟 {、(、空格或直接换行的硬核宏名
  */
 function isDefLine(line: string, macroName: string): boolean {
-  const idx = line.indexOf('def ');
-  if (idx === -1) return false;
-  const afterDef = line.substring(idx + 4).trimStart();
-  // 宏名结束于空格或 '('
-  const nameEnd = afterDef.search(/[\s(]/);
-  const name = nameEnd === -1 ? afterDef : afterDef.substring(0, nameEnd);
-  return name === macroName;
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('def ')) return false;
+  
+  // 剥离掉开头的 def 关键字
+  const afterDef = trimmed.substring(4).trimStart();
+  
+  // 严格比对：必须以当前宏名开头
+  if (afterDef.startsWith(macroName)) {
+    const nextChar = afterDef.charAt(macroName.length);
+    // 确保紧随其后的字符属于合法的宏声明边界（行尾、空格、括号、花括号、等号、中括号等）
+    if (!nextChar || /[\s(){[=]/.test(nextChar)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
- * 从源码中提取指定宏定义前的连续注释行（通用字符串匹配）。
+ * 从源码中提取指定宏定义前的连续注释行（通用字符串匹配）
  */
 function extractMacroDocFromSource(source: string, macroName: string): string[] {
   const lines = source.split('\n');
@@ -236,7 +248,6 @@ export function createRopCompletionProvider(
         }
       });
 
-      // 宏补全
       try {
         const meta = getWasmMetadata(currentCode);
         (meta.macro_names || []).forEach((name: string) => {
@@ -249,7 +260,6 @@ export function createRopCompletionProvider(
           const detailParts = [`Macro Def: (${params.join(', ')})`];
           if (isRT) detailParts.push('[RT]');
 
-          // 为当前宏名寻找合适的替换范围（尤其 $ 宏）
           let itemRange = { ...range };
           const currentMacroName = getFullMacroNameAtCursor(model, position);
           if (currentMacroName && currentMacroName.startsWith('$')) {
@@ -396,7 +406,9 @@ export function createRopHoverProvider(
         }
       }
 
-      if (params.length === 0 && defLineNumber === -1) return null;
+      // 💡 核心修复：放行 0 参数的外部依赖库宏。
+      // 只要它是合法的外部库导入宏 (isImported === true)，即使参数长度为 0，也绝不拦截返回 null！
+      if (!isImported && defLineNumber === -1) return null;
 
       // 4. 构建签名
       if (params.length === 0 && defLineText) {
