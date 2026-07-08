@@ -267,7 +267,7 @@ export default function RopLibraryModal({
               <div key={`${lib.name}@${lib.isLocal ? 'local' : 'cloud'}`} style={{ background: '#111', border: '1px solid #222', borderRadius: '6px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <span style={{ color: lib.isLocal ? '#ffd700' : '#38bdf8', fontSize: '11px', marginRight: '6px' }}>{lib.isLocal ? '● LOCAL_LIB' : '● CACHED_LIB'}</span>
+                    <span style={{ color: lib.isLocal ? '#ffd700' : '#38bdf8', fontSize: '11px', marginRight: '6px' }}>{lib.isLocal ? '● LOCAL_LIB' : '● CLOUD_LIB'}</span>
                     <strong style={{ color: '#fff', fontSize: '14px' }}>{lib.name}</strong>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
