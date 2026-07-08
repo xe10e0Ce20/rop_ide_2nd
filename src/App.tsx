@@ -541,7 +541,7 @@ export default function App() {
     // 获取增强源码（匹配标准 `@import(std_io)` 去掉 @ 前缀库查找逻辑）
     const getAugmentedSourceForMetadata = (src: string): string => {
       const lines = src.split('\n');
-      const importPattern = /^@import\s*\(\s*([a-zA-Z_]\w*(?:[-.][a-zA-Z_]\w*)*)\s*\)(?:\s*\/\/.*)?\s*$/;
+      const importPattern = /^@import\s*\(\s*([a-zA-Z_]\w*)\s*\)(?:\s*\/\/.*)?\s*$/;
       let augmented = src;
       for (const line of lines) {
         const match = line.trim().match(importPattern);
