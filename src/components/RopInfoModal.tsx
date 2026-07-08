@@ -92,7 +92,18 @@ export default function RopInfoModal({ isOpen, onClose, pwaVersion = pkg.version
           <div style={{ marginBottom: '8px', textAlign: 'left' }}>
             <div style={{ color: '#38bdf8', fontWeight: 'bold', fontSize: '13px', fontFamily: "'JetBrains Mono', monospace" }}>v0.0.1 (Current)</div>
             <ul style={{ margin: '4px 0 0 0', paddingLeft: '20px', color: '#ccc', textAlign: 'left' }}>
-              <li style={{ marginBottom: '4px' }}>Initial Release // 系统初次构建完成。预发行版本。</li>
+              <li style={{ marginBottom: '4px' }}>Initial Release // 系统初次构建完成。预发行版本。目前程序不稳定，建议初次启动，等待5分钟后刷新几次。</li>
+            </ul>
+          </div>
+
+          <hr style={{ border: 'none', borderTop: '1px solid #222', margin: '16px 0' }} />
+
+          {/* Release Notes */}
+          <h3 style={{ margin: '0 0 12px 0', color: '#fff', fontFamily: "'JetBrains Mono', monospace", fontSize: '14px', textAlign: 'left' }}>🔨 工具链 / Tool Chain</h3>
+          <div style={{ marginBottom: '8px', textAlign: 'left' }}>
+            <ul style={{ margin: '4px 0 0 0', paddingLeft: '20px', color: '#ccc', textAlign: 'left' }}>
+              <li style={{ marginBottom: '4px' }}>ggt-finder: gadget查找器</li><a href="https://ggt-finder.pages.dev/" style={{ color: '#38bdf8'}}>ggt-finder.pages.dev/</a>
+              <li style={{ marginBottom: '4px' }}>disas生成器（基于users的反汇编器开发，用于提供ggt-finder能识别的_disas）</li><a href="https://tieba.baidu.com/p/10780399354" style={{ color: '#38bdf8'}}>贴吧</a>
             </ul>
           </div>
 
