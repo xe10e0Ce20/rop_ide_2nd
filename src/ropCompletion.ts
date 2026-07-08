@@ -69,13 +69,13 @@ function safeEscapeMacroName(macroName: string): string {
 }
 
 /**
- * 从源码中提取指定宏定义前的连续注释行（完美兼容各类含特殊符号的宏名）
+ * 从源码中提取指定宏定义前的连续注释行（完美兼容特殊符号，且遇到空行立即截断）
  */
 function extractMacroDocFromSource(source: string, macroName: string): string[] {
   const lines = source.split('\n');
   const escapedName = safeEscapeMacroName(macroName);
   
-  // 💡 终极正则：def 后面跟随空白，然后完全匹配宏名，后面允许紧跟 ( 或 { 或者空白
+  // 终极正则：def 后面跟随空白，然后完全匹配宏名，后面允许紧跟 ( 或 { 或者空白
   const defRegex = new RegExp(`\\bdef\\s+${escapedName}\\s*(?:\\(|\\{|\\s|$)`);
   
   for (let i = 0; i < lines.length; i++) {
@@ -85,11 +85,12 @@ function extractMacroDocFromSource(source: string, macroName: string): string[] 
       while (p >= 0) {
         const trimmed = lines[p].trim();
         if (trimmed.startsWith('//')) {
+          // 提取有效注释文本
           docLines.unshift(trimmed.replace(/^\/\/\s*/, ''));
           p--;
-        } else if (trimmed === '') {
-          p--;
         } else {
+          // 💡 核心修复：无论是遇到了真正的空行 (trimmed === '')，
+          // 还是遇到了其他代码行，只要不是紧密连续的 // 注释，直接阻断向上回溯
           break;
         }
       }
