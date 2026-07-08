@@ -91,13 +91,12 @@ function extractMacroDocFromSource(source: string, macroName: string): string[] 
 }
 
 // ==================== 1. 自动补全提供者 ====================
-// ==================== 1. 自动补全提供者 ====================
 export function createRopCompletionProvider(
   getWasmMetadata: (code: string) => AutocompleteMeta,
   getAvailableLibs?: () => string[]
 ) {
   return {
-    triggerCharacters: ['@', '&', '_', '$', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'm', 'p', 's', 'r'],
+    triggerCharacters: ['@', '&', '_', '$'],
     provideCompletionItems: (model: any, position: any) => {
       const currentCode = model.getValue();
       const wordInfo = model.getWordUntilPosition(position);
@@ -217,34 +216,12 @@ export function createRopCompletionProvider(
           const detailParts = [`Macro Def: (${params.join(', ')})`];
           if (isRT) detailParts.push('[RT]');
 
-          const isDollarMacro = name.startsWith('$');
-          const isTypingDollar = (wordInfo.word || '').startsWith('$');
+          // 💡 改进：filterText 使用原始名。
+          // 如果用户输入 $e，Monaco 会尝试匹配 $e，name 本身就是 $ 开头的，完全符合匹配逻辑。
+          const filterText = name; 
 
-          let itemRange = {
-            startLineNumber: position.lineNumber,
-            endLineNumber: position.lineNumber,
-            startColumn: wordInfo.startColumn,
-            endColumn: wordInfo.endColumn
-          };
-
-          let filterText = name;
-          let textToInsert = name;
-
-          if (isDollarMacro) {
-            const pureName = name.slice(1);
-            if (isTypingDollar) {
-              // 用户已输入 $，直接用完整宏名匹配
-              filterText = name;
-              textToInsert = name;
-            } else {
-              // 用户未输入 $，用纯字母匹配，但插入完整宏名
-              filterText = pureName;
-              textToInsert = name;
-            }
-          }
-
-          // 转义 $，防止被 snippet 引擎解释为变量
-          const escapedInsertName = textToInsert.replace(/\$/g, '\\$');
+          // 💡 保持 insertText 完整
+          const escapedInsertName = name.replace(/\$/g, '\\$');
           const snippetArgs = params.map((p, i) => `\${${i + 1}:${p}}`).join(', ');
           const finalInsertText = `${escapedInsertName}(${snippetArgs})`;
 
@@ -254,8 +231,12 @@ export function createRopCompletionProvider(
             insertText: finalInsertText,
             insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
             filterText: filterText,
+            // 💡 核心：强制提升优先级，'000' 会让它们永远排在所有关键词和标签的最上方
+            sortText: '000', 
             detail: detailParts.join(' '),
-            range: itemRange,
+            range: range,
+            // 💡 增加 commitCharacters，让用户在输入 '(' 时直接触发补全上屏
+            commitCharacters: ['(']
           });
         });
       } catch (e) {
