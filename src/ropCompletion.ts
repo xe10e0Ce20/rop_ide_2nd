@@ -62,13 +62,22 @@ function getMacroParamNames(meta: AutocompleteMeta, macroName: string): string[]
 }
 
 /**
- * 从源码中提取指定宏定义前的连续注释行（兼容 $ 宏名，安全去除边界 \b 限制）
+ * 💡 增强版转义：为保护特殊宏名，不仅转义正则元字符，同时彻底抛弃不靠谱的 \b
+ */
+function safeEscapeMacroName(macroName: string): string {
+  return macroName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 从源码中提取指定宏定义前的连续注释行（完美兼容各类含特殊符号的宏名）
  */
 function extractMacroDocFromSource(source: string, macroName: string): string[] {
   const lines = source.split('\n');
-  const escapedName = macroName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // 💡 针对以 $ 开头的宏名，取消前面的 \b 限制，改用 (?:\b|(?=\$)) 兼容
-  const defRegex = new RegExp(`(?:\\b|(?=\\$))def\\s+${escapedName}(?:\\b|(?=\\())`);
+  const escapedName = safeEscapeMacroName(macroName);
+  
+  // 💡 终极正则：def 后面跟随空白，然后完全匹配宏名，后面允许紧跟 ( 或 { 或者空白
+  const defRegex = new RegExp(`\\bdef\\s+${escapedName}\\s*(?:\\(|\\{|\\s|$)`);
+  
   for (let i = 0; i < lines.length; i++) {
     if (defRegex.test(lines[i])) {
       const docLines: string[] = [];
@@ -101,7 +110,6 @@ export function createRopCompletionProvider(
       const currentCode = model.getValue();
       const wordInfo = model.getWordUntilPosition(position);
       
-      // 💡 统一的 Range
       const range = {
         startLineNumber: position.lineNumber,
         endLineNumber: position.lineNumber,
@@ -203,7 +211,6 @@ export function createRopCompletionProvider(
         }
       });
 
-      // ==================== 宏补全（终极修正） ====================
       try {
         const meta = getWasmMetadata(currentCode);
         (meta.macro_names || []).forEach((name: string) => {
@@ -216,11 +223,8 @@ export function createRopCompletionProvider(
           const detailParts = [`Macro Def: (${params.join(', ')})`];
           if (isRT) detailParts.push('[RT]');
 
-          // 💡 改进：filterText 使用原始名。
-          // 如果用户输入 $e，Monaco 会尝试匹配 $e，name 本身就是 $ 开头的，完全符合匹配逻辑。
           const filterText = name; 
 
-          // 💡 保持 insertText 完整
           const escapedInsertName = name.replace(/\$/g, '\\$');
           const snippetArgs = params.map((p, i) => `\${${i + 1}:${p}}`).join(', ');
           const finalInsertText = `${escapedInsertName}(${snippetArgs})`;
@@ -231,11 +235,9 @@ export function createRopCompletionProvider(
             insertText: finalInsertText,
             insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
             filterText: filterText,
-            // 💡 核心：强制提升优先级，'000' 会让它们永远排在所有关键词和标签的最上方
             sortText: '000', 
             detail: detailParts.join(' '),
             range: range,
-            // 💡 增加 commitCharacters，让用户在输入 '(' 时直接触发补全上屏
             commitCharacters: ['(']
           });
         });
@@ -252,29 +254,39 @@ export function createRopCompletionProvider(
 export function createRopDefinitionProvider() {
   return {
     provideDefinition: (model: any, position: any) => {
-      // 💡 兼容 $ 符号的单词提取
       const lineContent = model.getLineContent(position.lineNumber);
-      const wordInfo = model.getWordAtPosition(position);
-      if (!wordInfo) return null;
-
-      let targetLabel = wordInfo.word;
-      // 检查前面是不是隐藏了 $
-      if (wordInfo.startColumn > 1 && lineContent[wordInfo.startColumn - 2] === '$') {
-        targetLabel = '$' + targetLabel;
+      
+      // 💡 针对包含特殊符号的自定义宏名进行整行回溯扫描
+      let targetLabel = '';
+      const totalLines = model.getLineCount();
+      
+      // 尝试匹配光标位置属于哪个宏调用/定义
+      const currentColumn = position.column;
+      // 匹配可能带有 $、[ ]、=、| 的长宏调用名或标签
+      const macroMatchRegex = /(?:\b|\$)[a-zA-Z_0-9$|=[\]@#&_~.-]+/g;
+      let match;
+      while ((match = macroMatchRegex.exec(lineContent)) !== null) {
+        const start = match.index + 1;
+        const end = start + match[0].length;
+        if (currentColumn >= start && currentColumn <= end) {
+          targetLabel = match[0];
+          break;
+        }
       }
 
-      const escapedTarget = targetLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const definitionRegex = new RegExp(`(?:\\b|(?=\\$))${escapedTarget}\\s*:`);
+      if (!targetLabel) return null;
+
+      const escapedTarget = safeEscapeMacroName(targetLabel);
+      const definitionRegex = new RegExp(`(?:\\bdef\\s+${escapedTarget}\\b|${escapedTarget}\\s*:)`);
 
       const defIntervals = getDefIntervals(model);
-      const activeDef = defIntervals.find(interval => currentLine >= interval.start && currentLine <= interval.end);
       const currentLine = position.lineNumber;
+      const activeDef = defIntervals.find(interval => currentLine >= interval.start && currentLine <= interval.end);
 
       if (activeDef) {
         for (let lineNumber = activeDef.start; lineNumber <= activeDef.end; lineNumber++) {
           const currentLineText = model.getLineContent(lineNumber);
-          const match = currentLineText.match(definitionRegex);
-          if (match) {
+          if (definitionRegex.test(currentLineText)) {
             const column = currentLineText.indexOf(targetLabel) + 1;
             return {
               uri: model.uri,
@@ -283,14 +295,12 @@ export function createRopDefinitionProvider() {
           }
         }
       } else {
-        const totalLines = model.getLineCount();
         for (let lineNumber = 1; lineNumber <= totalLines; lineNumber++) {
           const isInsideAnyDef = defIntervals.some(interval => lineNumber >= interval.start && lineNumber <= interval.end);
           if (isInsideAnyDef) continue;
 
           const currentLineText = model.getLineContent(lineNumber);
-          const match = currentLineText.match(definitionRegex);
-          if (match) {
+          if (definitionRegex.test(currentLineText)) {
             const column = currentLineText.indexOf(targetLabel) + 1;
             return {
               uri: model.uri,
@@ -299,7 +309,6 @@ export function createRopDefinitionProvider() {
           }
         }
       }
-
       return null;
     }
   };
@@ -313,17 +322,28 @@ export function createRopHoverProvider(
   return {
     provideHover: (model: any, position: any) => {
       const lineContent = model.getLineContent(position.lineNumber);
-      const wordInfo = model.getWordAtPosition(position);
-      if (!wordInfo) return null;
+      const currentColumn = position.column;
+      
+      // 💡 核心破局点：绕过 Monaco 的 Word 分隔限制。
+      // 使用更宽松的自定义正则，在当前行抓取出包含 $、[、]、=、| 组合的真实长标识符。
+      let targetWord = '';
+      let startColumn = currentColumn;
+      let endColumn = currentColumn;
 
-      // 💡 核心修复：如果是 $ 宏，wordInfo.word 拿到的只是后面的纯文本，必须补上 $
-      let targetWord = wordInfo.word;
-      let startColumn = wordInfo.startColumn;
-      if (wordInfo.startColumn > 1 && lineContent[wordInfo.startColumn - 2] === '$') {
-        targetWord = '$' + targetWord;
-        startColumn = wordInfo.startColumn - 1; // 悬停高亮区间向前扩展覆盖 $
+      const fullMacroCallRegex = /(?:\b|\$)[a-zA-Z_0-9$|=[\]@#&_~.-]+/g;
+      let match;
+      while ((match = fullMacroCallRegex.exec(lineContent)) !== null) {
+        const start = match.index + 1;
+        const end = start + match[0].length;
+        if (currentColumn >= start && currentColumn <= end) {
+          targetWord = match[0];
+          startColumn = start;
+          endColumn = end;
+          break;
+        }
       }
 
+      if (!targetWord) return null;
       const currentCode = model.getValue();
 
       // 1. 从元数据获取参数名
@@ -333,8 +353,8 @@ export function createRopHoverProvider(
         const meta = getWasmMetadata(currentCode);
         if (meta?.macro_names?.includes(targetWord)) {
           params = getMacroParamNames(meta, targetWord);
-          const escaped = targetWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-          const defRegex = new RegExp(`(?:\\b|(?=\\$))def\\s+${escaped}(?:\\b|(?=\\())`);
+          const escaped = safeEscapeMacroName(targetWord);
+          const defRegex = new RegExp(`\\bdef\\s+${escaped}\\s*(?:\\(|\\{|\\s|$)`);
           let hasLocal = false;
           for (let i = 1; i <= model.getLineCount(); i++) {
             if (defRegex.test(model.getLineContent(i))) {
@@ -349,8 +369,8 @@ export function createRopHoverProvider(
       // 2. 查找本地 def 行（回退参数和文档）
       let defLineNumber = -1;
       let defLineText = '';
-      const escaped = targetWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const defRegex = new RegExp(`(?:\\b|(?=\\$))def\\s+${escaped}(?:\\b|(?=\\())`);
+      const escaped = safeEscapeMacroName(targetWord);
+      const defRegex = new RegExp(`\\bdef\\s+${escaped}\\s*(?:\\(|\\{|\\s|$)`);
       for (let i = 1; i <= model.getLineCount(); i++) {
         const line = model.getLineContent(i);
         if (defRegex.test(line)) {
@@ -363,14 +383,14 @@ export function createRopHoverProvider(
       // 3. 如果仍然没有参数信息，尝试从导入库源码提取
       if (defLineNumber === -1 && params.length === 0 && getLibSource) {
         const importRegex = /@import\s*\(\s*([a-zA-Z_]\w*)\s*\)/g;
-        let match;
-        while ((match = importRegex.exec(currentCode)) !== null) {
-          const libName = match[1];
+        let matchImport;
+        while ((matchImport = importRegex.exec(currentCode)) !== null) {
+          const libName = matchImport[1];
           const libSource = getLibSource(libName);
           if (libSource) {
             const lines = libSource.split('\n');
-            const escapedLib = targetWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const defLine = lines.find(line => new RegExp(`(?:\\b|(?=\\$))def\\s+${escapedLib}(?:\\b|(?=\\())`).test(line));
+            const escapedLib = safeEscapeMacroName(targetWord);
+            const defLine = lines.find(line => new RegExp(`\\bdef\\s+${escapedLib}\\s*(?:\\(|\\{|\\s|$)`).test(line));
             if (defLine) {
               const m = defLine.match(/\(([^)]*)\)/);
               if (m) params = m[1].split(',').map(s => s.trim()).filter(Boolean);
@@ -406,9 +426,9 @@ export function createRopHoverProvider(
         }
       } else if (isImported && getLibSource) {
         const importRegex = /@import\s*\(\s*([a-zA-Z_]\w*)\s*\)/g;
-        let match;
-        while ((match = importRegex.exec(currentCode)) !== null) {
-          const libSource = getLibSource(match[1]);
+        let matchImport;
+        while ((matchImport = importRegex.exec(currentCode)) !== null) {
+          const libSource = getLibSource(matchImport[1]);
           if (libSource) {
             const found = extractMacroDocFromSource(libSource, targetWord);
             if (found.length > 0) { docLines = found; break; }
@@ -423,9 +443,9 @@ export function createRopHoverProvider(
       return {
         range: {
           startLineNumber: position.lineNumber,
-          startColumn: startColumn, // 使用修正后的 startColumn，保证 $ 符号在悬停时也能亮起
+          startColumn: startColumn, 
           endLineNumber: position.lineNumber,
-          endColumn: wordInfo.endColumn
+          endColumn: endColumn
         },
         contents: [
           { value: `\`\`\`rop\n${signature}\n\`\`\`` },
