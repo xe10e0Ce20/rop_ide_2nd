@@ -91,15 +91,18 @@ function extractMacroDocFromSource(source: string, macroName: string): string[] 
 }
 
 // ==================== 1. 自动补全提供者 ====================
+// ==================== 1. 自动补全提供者 ====================
 export function createRopCompletionProvider(
   getWasmMetadata: (code: string) => AutocompleteMeta,
   getAvailableLibs?: () => string[]
 ) {
   return {
-    triggerCharacters: ['@', '&', '_', '$'],
+    triggerCharacters: ['@', '&', '_', '$', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'm', 'p', 's', 'r'],
     provideCompletionItems: (model: any, position: any) => {
       const currentCode = model.getValue();
       const wordInfo = model.getWordUntilPosition(position);
+      
+      // 💡 统一的 Range
       const range = {
         startLineNumber: position.lineNumber,
         endLineNumber: position.lineNumber,
@@ -161,7 +164,6 @@ export function createRopCompletionProvider(
       const seenLabels = new Set<string>();
       const Kind = monaco.languages.CompletionItemKind;
 
-      // 3. 压入普通关键字 (使用常规 range)
       staticKeywords.forEach(kw => {
         if (!seenLabels.has(kw)) {
           seenLabels.add(kw);
@@ -202,6 +204,7 @@ export function createRopCompletionProvider(
         }
       });
 
+      // ==================== 宏补全（终极修正） ====================
       try {
         const meta = getWasmMetadata(currentCode);
         (meta.macro_names || []).forEach((name: string) => {
@@ -214,22 +217,50 @@ export function createRopCompletionProvider(
           const detailParts = [`Macro Def: (${params.join(', ')})`];
           if (isRT) detailParts.push('[RT]');
 
-          // 💡 绝杀修复：处理 Monaco Snippet 把 $ 当作变量吃掉的问题
-          // 把 $ 转义为 \$，防止 Snippet 引擎解析错误
-          const escapedNameForSnippet = name.replace(/\$/g, '\\$');
+          const isDollarMacro = name.startsWith('$');
+          const isTypingDollar = (wordInfo.word || '').startsWith('$');
+
+          let itemRange = {
+            startLineNumber: position.lineNumber,
+            endLineNumber: position.lineNumber,
+            startColumn: wordInfo.startColumn,
+            endColumn: wordInfo.endColumn
+          };
+
+          let filterText = name;
+          let textToInsert = name;
+
+          if (isDollarMacro) {
+            const pureName = name.slice(1);
+            if (isTypingDollar) {
+              // 用户已输入 $，直接用完整宏名匹配
+              filterText = name;
+              textToInsert = name;
+            } else {
+              // 用户未输入 $，用纯字母匹配，但插入完整宏名
+              filterText = pureName;
+              textToInsert = name;
+            }
+          }
+
+          // 转义 $，防止被 snippet 引擎解释为变量
+          const escapedInsertName = textToInsert.replace(/\$/g, '\\$');
+          const snippetArgs = params.map((p, i) => `\${${i + 1}:${p}}`).join(', ');
+          const finalInsertText = `${escapedInsertName}(${snippetArgs})`;
 
           suggestions.push({
             label: name,
             kind: Kind.Method,
-            // 👈 使用转义后的名称拼接 Snippet
-            insertText: `${escapedNameForSnippet}(${params.map((p, i) => `\${${i + 1}:${p}}`).join(', ')})`,
+            insertText: finalInsertText,
             insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-            filterText: name, 
+            filterText: filterText,
             detail: detailParts.join(' '),
-            range, 
+            range: itemRange,
           });
         });
-      } catch (e) {}
+      } catch (e) {
+        console.error("WASM 宏提取失败:", e);
+      }
 
       return { suggestions } as any;
     }
