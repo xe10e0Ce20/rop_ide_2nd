@@ -249,7 +249,7 @@ export default function App() {
   }, []);
 
   useEffect(() => { localStorage.setItem(LOCAL_STORAGE_KEY, code); }, [code]);
-  useEffect(() => { initWasm().then(() => setWasmReady(true)).catch(err => console.error("WASM 加载失败:", err)); }, []);
+  useEffect(() => { initWasm().then(() => {setWasmReady(true); (window as any).__wasm = { get_autocomplete_metadata, compile_for_web };}).catch(err => console.error("WASM 加载失败:", err)); }, []);
 
   // 💡 声明一个统一的拖拽状态
   const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -574,10 +574,12 @@ export default function App() {
     );
 
     // 辅助函数：获取 def 区间
+    // 💡 修改 App.tsx 内部 handleEditorWillMount 里的 getDefIntervals
     function getDefIntervals(codeText: string): Array<{ start: number; end: number }> {
       const lines = codeText.split('\n');
       const intervals: Array<{ start: number; end: number }> = [];
-      const defStartRegex = /\bdef\s+[a-zA-Z_]\w*\b/;
+      // 兼容 $ 开头的宏定义
+      const defStartRegex = /(?:\b|(?=\$))def\s+(?:[a-zA-Z_]\w*|\$\S+)/;
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (defStartRegex.test(line)) {
@@ -601,7 +603,7 @@ export default function App() {
             if (j === braceLine) braceCount = open;
             else braceCount += open - close;
             if (braceCount <= 0) {
-              endLine = j + 1; // 行号从1开始
+              endLine = j + 1;
               break;
             }
           }
@@ -622,7 +624,9 @@ export default function App() {
       const startLine = activeDef ? activeDef.start : 1;
       const endLine = activeDef ? activeDef.end : lines.length;
 
-      const labelDefRegex = new RegExp(`^\\s*(${word})\\s*:`);
+      // 转义 word，防止带有特殊字符损坏正则
+      const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const labelDefRegex = new RegExp(`^\\s*(${escapedWord})\\s*:`);
       for (let i = startLine; i <= endLine; i++) {
         const line = lines[i - 1] || '';
         if (labelDefRegex.test(line)) {

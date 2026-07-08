@@ -6,11 +6,11 @@ declare const monaco: {
     languages: typeof languages;
 };
 
-// 稳健的 def 区间提取（支持跨行 def 声明与含默认值的参数）
+// 稳健的 def 区间提取（支持跨行 def 声明、含默认值的参数、$ 宏名）
 export function getDefIntervals(model: any): DefInterval[] {
   const totalLines = model.getLineCount();
   const intervals: DefInterval[] = [];
-  const defStartRegex = /\bdef\s+[a-zA-Z_]\w*\b/;
+  const defStartRegex = /\bdef\s+(?:[a-zA-Z_]\w*|\$\S+)\b/;
   for (let i = 1; i <= totalLines; i++) {
     const line = model.getLineContent(i);
     if (defStartRegex.test(line)) {
@@ -52,7 +52,6 @@ function getMacroParamNames(meta: AutocompleteMeta, macroName: string): string[]
   if (!meta?.macro_details) return [];
   const details = meta.macro_details[macroName];
   if (!details) return [];
-  // 兼容旧版（字符串数组）和新版（MacroParamInfo 数组）
   if (Array.isArray(details) && details.length > 0) {
     if (typeof details[0] === 'string') {
       return details as unknown as string[];
@@ -63,11 +62,13 @@ function getMacroParamNames(meta: AutocompleteMeta, macroName: string): string[]
 }
 
 /**
- * 从源码中提取指定宏定义前的连续注释行
+ * 从源码中提取指定宏定义前的连续注释行（兼容 $ 宏名，安全去除边界 \b 限制）
  */
 function extractMacroDocFromSource(source: string, macroName: string): string[] {
   const lines = source.split('\n');
-  const defRegex = new RegExp(`\\bdef\\s+${macroName}\\b`);
+  const escapedName = macroName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // 💡 针对以 $ 开头的宏名，取消前面的 \b 限制，改用 (?:\b|(?=\$)) 兼容
+  const defRegex = new RegExp(`(?:\\b|(?=\\$))def\\s+${escapedName}(?:\\b|(?=\\())`);
   for (let i = 0; i < lines.length; i++) {
     if (defRegex.test(lines[i])) {
       const docLines: string[] = [];
@@ -95,7 +96,7 @@ export function createRopCompletionProvider(
   getAvailableLibs?: () => string[]
 ) {
   return {
-    triggerCharacters: ['@', '&', '_', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'm', 'p', 's', 'r'],
+    triggerCharacters: ['@', '&', '_', '$'],
     provideCompletionItems: (model: any, position: any) => {
       const currentCode = model.getValue();
       const wordInfo = model.getWordUntilPosition(position);
@@ -132,19 +133,17 @@ export function createRopCompletionProvider(
       const defIntervals = getDefIntervals(model);
       const activeDef = defIntervals.find(interval => currentLine >= interval.start && currentLine <= interval.end);
 
-      // 收集作用域内的标签
+      const labelRegex = /\b([a-zA-Z_]\w*):(?=\s|$)/g;
       if (activeDef) {
         let defBodyContent = '';
         for (let i = activeDef.start; i <= activeDef.end; i++) {
           defBodyContent += model.getLineContent(i) + '\n';
         }
-        const labelRegex = /\b([a-zA-Z_]\w*):/g;
         let match;
         while ((match = labelRegex.exec(defBodyContent)) !== null) {
           if (!foundLabels.includes(match[1])) foundLabels.push(match[1]);
         }
       } else {
-        // 构建全局内容（排除 def 内部）
         let cleanGlobalContent = '';
         const totalLines = model.getLineCount();
         for (let i = 1; i <= totalLines; i++) {
@@ -153,8 +152,6 @@ export function createRopCompletionProvider(
             cleanGlobalContent += model.getLineContent(i) + '\n';
           }
         }
-        // 提取普通标签
-        const labelRegex = /\b([a-zA-Z_]\w*):/g;
         let match;
         while ((match = labelRegex.exec(cleanGlobalContent)) !== null) {
           if (!foundLabels.includes(match[1])) foundLabels.push(match[1]);
@@ -164,6 +161,7 @@ export function createRopCompletionProvider(
       const seenLabels = new Set<string>();
       const Kind = monaco.languages.CompletionItemKind;
 
+      // 3. 压入普通关键字 (使用常规 range)
       staticKeywords.forEach(kw => {
         if (!seenLabels.has(kw)) {
           seenLabels.add(kw);
@@ -183,9 +181,6 @@ export function createRopCompletionProvider(
           const baseText = field.startsWith('@') ? field.slice(1) : field;
           const tokenText = hasAtPrefix ? baseText : field;
           const insertText = `${tokenText}()`;
-
-          // 💡 核心修复：如果是以 @ 触发的，过滤纯文本；如果是普通输入，必须用带 @ 的原字段过滤
-          // 这样既能保证输入 '@' 时完美过滤，又不会在输入普通字母时干扰到下方的宏补全匹配
           const finalFilterText = hasAtPrefix ? baseText : field;
 
           suggestions.push({ 
@@ -193,7 +188,7 @@ export function createRopCompletionProvider(
             kind: Kind.Function, 
             insertText: insertText,
             insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-            filterText: finalFilterText, // 👈 使用动态分流的过滤文本
+            filterText: finalFilterText,
             detail: 'Built-in Annotation', 
             range 
           });
@@ -207,7 +202,6 @@ export function createRopCompletionProvider(
         }
       });
 
-      // 宏补全
       try {
         const meta = getWasmMetadata(currentCode);
         (meta.macro_names || []).forEach((name: string) => {
@@ -220,17 +214,22 @@ export function createRopCompletionProvider(
           const detailParts = [`Macro Def: (${params.join(', ')})`];
           if (isRT) detailParts.push('[RT]');
 
+          // 💡 绝杀修复：处理 Monaco Snippet 把 $ 当作变量吃掉的问题
+          // 把 $ 转义为 \$，防止 Snippet 引擎解析错误
+          const escapedNameForSnippet = name.replace(/\$/g, '\\$');
+
           suggestions.push({
             label: name,
             kind: Kind.Method,
-            insertText: `${name}(${params.map((p, i) => `\${${i + 1}:${p}}`).join(', ')})`,
+            // 👈 使用转义后的名称拼接 Snippet
+            insertText: `${escapedNameForSnippet}(${params.map((p, i) => `\${${i + 1}:${p}}`).join(', ')})`,
             insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-            filterText: name,
+            filterText: name, 
             detail: detailParts.join(' '),
-            range,
+            range, 
           });
         });
-      } catch (e) { }
+      } catch (e) {}
 
       return { suggestions } as any;
     }
@@ -241,15 +240,23 @@ export function createRopCompletionProvider(
 export function createRopDefinitionProvider() {
   return {
     provideDefinition: (model: any, position: any) => {
+      // 💡 兼容 $ 符号的单词提取
+      const lineContent = model.getLineContent(position.lineNumber);
       const wordInfo = model.getWordAtPosition(position);
       if (!wordInfo) return null;
 
-      const targetLabel = wordInfo.word;
-      const currentLine = position.lineNumber;
-      const definitionRegex = new RegExp(`\\b${targetLabel}\\s*:`);
+      let targetLabel = wordInfo.word;
+      // 检查前面是不是隐藏了 $
+      if (wordInfo.startColumn > 1 && lineContent[wordInfo.startColumn - 2] === '$') {
+        targetLabel = '$' + targetLabel;
+      }
+
+      const escapedTarget = targetLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const definitionRegex = new RegExp(`(?:\\b|(?=\\$))${escapedTarget}\\s*:`);
 
       const defIntervals = getDefIntervals(model);
       const activeDef = defIntervals.find(interval => currentLine >= interval.start && currentLine <= interval.end);
+      const currentLine = position.lineNumber;
 
       if (activeDef) {
         for (let lineNumber = activeDef.start; lineNumber <= activeDef.end; lineNumber++) {
@@ -293,10 +300,18 @@ export function createRopHoverProvider(
 ) {
   return {
     provideHover: (model: any, position: any) => {
+      const lineContent = model.getLineContent(position.lineNumber);
       const wordInfo = model.getWordAtPosition(position);
       if (!wordInfo) return null;
 
-      const targetWord = wordInfo.word;
+      // 💡 核心修复：如果是 $ 宏，wordInfo.word 拿到的只是后面的纯文本，必须补上 $
+      let targetWord = wordInfo.word;
+      let startColumn = wordInfo.startColumn;
+      if (wordInfo.startColumn > 1 && lineContent[wordInfo.startColumn - 2] === '$') {
+        targetWord = '$' + targetWord;
+        startColumn = wordInfo.startColumn - 1; // 悬停高亮区间向前扩展覆盖 $
+      }
+
       const currentCode = model.getValue();
 
       // 1. 从元数据获取参数名
@@ -306,7 +321,8 @@ export function createRopHoverProvider(
         const meta = getWasmMetadata(currentCode);
         if (meta?.macro_names?.includes(targetWord)) {
           params = getMacroParamNames(meta, targetWord);
-          const defRegex = new RegExp(`\\bdef\\s+${targetWord}\\b`);
+          const escaped = targetWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const defRegex = new RegExp(`(?:\\b|(?=\\$))def\\s+${escaped}(?:\\b|(?=\\())`);
           let hasLocal = false;
           for (let i = 1; i <= model.getLineCount(); i++) {
             if (defRegex.test(model.getLineContent(i))) {
@@ -316,12 +332,13 @@ export function createRopHoverProvider(
           }
           isImported = !hasLocal;
         }
-      } catch (e) {}
+      } catch (e) { }
 
       // 2. 查找本地 def 行（回退参数和文档）
       let defLineNumber = -1;
       let defLineText = '';
-      const defRegex = new RegExp(`\\bdef\\s+${targetWord}\\b`);
+      const escaped = targetWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const defRegex = new RegExp(`(?:\\b|(?=\\$))def\\s+${escaped}(?:\\b|(?=\\())`);
       for (let i = 1; i <= model.getLineCount(); i++) {
         const line = model.getLineContent(i);
         if (defRegex.test(line)) {
@@ -340,7 +357,8 @@ export function createRopHoverProvider(
           const libSource = getLibSource(libName);
           if (libSource) {
             const lines = libSource.split('\n');
-            const defLine = lines.find(line => new RegExp(`\\bdef\\s+${targetWord}\\b`).test(line));
+            const escapedLib = targetWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const defLine = lines.find(line => new RegExp(`(?:\\b|(?=\\$))def\\s+${escapedLib}(?:\\b|(?=\\())`).test(line));
             if (defLine) {
               const m = defLine.match(/\(([^)]*)\)/);
               if (m) params = m[1].split(',').map(s => s.trim()).filter(Boolean);
@@ -393,7 +411,7 @@ export function createRopHoverProvider(
       return {
         range: {
           startLineNumber: position.lineNumber,
-          startColumn: wordInfo.startColumn,
+          startColumn: startColumn, // 使用修正后的 startColumn，保证 $ 符号在悬停时也能亮起
           endLineNumber: position.lineNumber,
           endColumn: wordInfo.endColumn
         },
