@@ -225,7 +225,7 @@ export default function RopLibraryModal({
         {/* 顶部大类切换 */}
         <div style={{ display: 'flex', background: '#111', borderBottom: '1px solid #2d2d2d', padding: '0 20px' }}>
           <button onClick={() => setAssetType('package')} style={{ background: 'none', border: 'none', borderBottom: assetType === 'package' ? '2px solid #00ffb3' : '2px solid transparent', color: assetType === 'package' ? '#00ffb3' : '#777', padding: '12px 20px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>📦 依赖库 (Packages/Imports)</button>
-          <button onClick={() => setAssetType('snippet')} style={{ background: 'none', border: 'none', borderBottom: assetType === 'snippet' ? '2px solid #38bdf8' : '2px solid transparent', color: assetType === 'snippet' ? '#38bdf8' : '#777', padding: '12px 20px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>📄 公开代码 (Standalone Snippets)</button>
+          <button onClick={() => setAssetType('snippet')} style={{ background: 'none', border: 'none', borderBottom: assetType === 'snippet' ? '2px solid #38bdf8' : '2px solid transparent', color: assetType === 'snippet' ? '#38bdf8' : '#777', padding: '12px 20px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>📄 代码 (Standalone Snippets)</button>
         </div>
 
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
@@ -329,7 +329,7 @@ export default function RopLibraryModal({
                     )}
 
                     {snippet.isLocal ? (
-                      <button type="button" onClick={async () => { if(confirm(`确定从工作区彻底注销公开代码 [ ${snippet.title} ] ？`)) { await deletePublicSnippet(snippet.title); onUpdateVfs(); } }} style={{ background: 'transparent', border: 'none', color: '#ef4444', padding: '3px 4px', fontSize: '11px', cursor: 'pointer' }}>[删除]</button>
+                      <button type="button" onClick={async () => { if(confirm(`确定从工作区彻底注销代码 [ ${snippet.title} ] ？`)) { await deletePublicSnippet(snippet.title); onUpdateVfs(); } }} style={{ background: 'transparent', border: 'none', color: '#ef4444', padding: '3px 4px', fontSize: '11px', cursor: 'pointer' }}>[删除]</button>
                     ) : (
                       <span style={{ fontSize: '11px', color: '#444', padding: '3px 4px' }}>[云端只读]</span>
                     )}
