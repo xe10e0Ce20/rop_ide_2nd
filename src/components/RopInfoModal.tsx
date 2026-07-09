@@ -92,7 +92,7 @@ export default function RopInfoModal({ isOpen, onClose, pwaVersion = pkg.version
           <div style={{ marginBottom: '8px', textAlign: 'left' }}>
             <div style={{ color: '#38bdf8', fontWeight: 'bold', fontSize: '13px', fontFamily: "'JetBrains Mono', monospace" }}>v0.0.1 (Current)</div>
             <ul style={{ margin: '4px 0 0 0', paddingLeft: '20px', color: '#ccc', textAlign: 'left' }}>
-              <li style={{ marginBottom: '4px' }}>Initial Release // 系统初次构建完成。预发行版本。目前程序不稳定，建议初次启动，等待5分钟后刷新几次。</li>
+              <li style={{ marginBottom: '4px' }}>Initial Release // 系统初次构建完成。预发行版本。目前程序不稳定，如果遇到字节码不高亮，自动补全不弹出等问题，建议刷新一下页面。</li>
             </ul>
           </div>
 
