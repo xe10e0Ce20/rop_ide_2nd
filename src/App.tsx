@@ -140,33 +140,6 @@ export default function App() {
         return;
       }
 
-      const updateStatus = () => {
-        navigator.serviceWorker.ready.then((registration) => {
-          const worker = registration.installing || registration.waiting || registration.active;
-          if (!worker) {
-            setSwStatus({ state: 'error', detail: '未检测到 Service Worker' });
-            return;
-          }
-
-          if (registration.installing) {
-            setSwStatus({ state: 'installing', detail: '正在安装 Service Worker...' });
-          } else if (registration.waiting) {
-            setSwStatus({ state: 'waiting', detail: '新版本已下载，等待激活' });
-          } else if (registration.active) {
-            if (navigator.serviceWorker.controller) {
-              setSwStatus({ state: 'active', detail: '离线资源已就绪' });
-            } else {
-              setSwStatus({ state: 'active', detail: 'Service Worker 已激活，刷新后生效' });
-            }
-          }
-        }).catch(() => {
-          setSwStatus({ state: 'error', detail: '无法获取 Service Worker 状态' });
-        });
-      };
-
-      updateStatus();
-
-      // 监听来自 Service Worker 的消息
       const handleMessage = (event: MessageEvent) => {
         if (event.data && event.data.type === 'SW_PROGRESS') {
           const { loaded, total, current, finished } = event.data;
@@ -176,36 +149,58 @@ export default function App() {
             progress: { loaded, total, current, finished }
           });
           if (finished) {
-            // 缓存完成，稍后会被 activate 事件更新
             setSwStatus({ state: 'waiting', detail: '新版本已缓存，等待激活' });
           }
         }
       };
 
-      navigator.serviceWorker.addEventListener('message', handleMessage);
-
-      const handleControllerChange = () => {
-        updateStatus();
-      };
-
-      navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
-
-      // 监听已有注册的更新
-      navigator.serviceWorker.ready.then((registration) => {
-        registration.addEventListener('updatefound', () => {
-          setSwStatus({ state: 'installing', detail: '发现新版本，正在下载...' });
-          const newWorker = registration.installing;
-          if (newWorker) {
-            newWorker.addEventListener('statechange', () => {
-              if (newWorker.state === 'installed') {
-                setSwStatus({ state: 'waiting', detail: '新版本已下载，等待激活' });
-              } else if (newWorker.state === 'activated') {
-                setSwStatus({ state: 'active', detail: '新版本已激活' });
-              }
-            });
+      const setupInstallingWorker = (registration: ServiceWorkerRegistration) => {
+        const worker = registration.installing;
+        if (!worker) return;
+        worker.addEventListener('statechange', () => {
+          if (worker.state === 'installed') {
+            setSwStatus({ state: 'waiting', detail: 'UPDATE_READY' });
+          } else if (worker.state === 'activated') {
+            setSwStatus({ state: 'active', detail: 'PWA' });
           }
         });
+      };
+
+      const handleControllerChange = () => {
+        navigator.serviceWorker.ready.then((reg) => {
+          if (reg.active && navigator.serviceWorker.controller) {
+            setSwStatus({ state: 'active', detail: 'PWA' });
+          }
+        });
+      };
+
+      // 初始化状态
+      navigator.serviceWorker.ready.then((registration) => {
+        // 如果正在安装，可能已经错过了 progress 消息，但我们可以直接进入 waiting/active 状态
+        if (registration.installing) {
+          setSwStatus({ state: 'installing', detail: '正在安装...' });
+          setupInstallingWorker(registration);
+        } else if (registration.waiting) {
+          setSwStatus({ state: 'waiting', detail: 'UPDATE_READY' });
+        } else if (registration.active) {
+          if (navigator.serviceWorker.controller) {
+            setSwStatus({ state: 'active', detail: 'PWA' });
+          } else {
+            setSwStatus({ state: 'active', detail: 'SW' }); // 激活但未控制页面（首次安装）
+          }
+        }
+
+        // 监听后续更新
+        registration.addEventListener('updatefound', () => {
+          setSwStatus({ state: 'installing', detail: '发现新版本...' });
+          setupInstallingWorker(registration);
+        });
+      }).catch(() => {
+        setSwStatus({ state: 'error', detail: '无法获取 SW' });
       });
+
+      navigator.serviceWorker.addEventListener('message', handleMessage);
+      navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
 
       return () => {
         navigator.serviceWorker.removeEventListener('message', handleMessage);
@@ -282,7 +277,7 @@ export default function App() {
     const checkRealOnlineStatus = async () => {
       if (!navigator.onLine) { if (isMounted) setIsOnline(false); return; }
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 1000);
+      const timer = setTimeout(() => controller.abort(), 5000);
       try {
         await fetch(`https://cloudflare.com/cdn-cgi/trace?t=${Date.now()}`, {
           method: 'GET', mode: 'cors', cache: 'no-store', signal: controller.signal
@@ -825,7 +820,7 @@ export default function App() {
               {swStatus.state === 'active' && 'PWA READY'}
               {swStatus.state === 'installing' && (swStatus.progress ? `CACHE ${swStatus.progress.loaded}/${swStatus.progress.total}` : 'INSTALLING')}
               {swStatus.state === 'waiting' && 'UPDATE PENDING'}
-              {swStatus.state === 'loading' && 'CHECKING'}
+              {swStatus.state === 'loading' && 'SW CHECKING'}
               {swStatus.state === 'error' && 'SW ERROR'}
             </span>
           </div>

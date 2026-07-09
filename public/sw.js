@@ -16,6 +16,7 @@ function postProgress(message) {
 
 self.addEventListener('install', (event) => {
   console.log('// VFS_PWA: 开始预缓存离线资源...');
+  postProgress({ type: 'SW_PROGRESS', loaded: 0, total: ASSETS.length, finished: false });
   event.waitUntil(
     caches.open(CACHE_NAME).then(async (cache) => {
       const total = ASSETS.length;
