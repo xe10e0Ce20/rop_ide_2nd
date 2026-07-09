@@ -128,43 +128,90 @@ export default function App() {
     });
 
     // 在 App.tsx 内注入以下检测逻辑：
-    const [isPwaCached, setIsPwaCached] = useState<boolean>(false);
+    const [swStatus, setSwStatus] = useState<{
+      state: 'loading' | 'installing' | 'waiting' | 'active' | 'error';
+      detail?: string;
+      progress?: { loaded: number; total: number; current?: string; finished?: boolean };
+    }>({ state: 'loading', detail: '正在检查 Service Worker...' });
 
     useEffect(() => {
-    if (!('serviceWorker' in navigator)) return;
-
-    // 💡 1. 封装一个核心状态更新函数
-    const checkAndSetPwaStatus = () => {
-      if (navigator.serviceWorker.controller) {
-        // 只有当前页面真正被 Service Worker 控制了，才算离线资产就绪
-        setIsPwaCached(true);
+      if (!('serviceWorker' in navigator)) {
+        setSwStatus({ state: 'error', detail: '浏览器不支持 Service Worker' });
+        return;
       }
-    };
 
-    // 💡 2. 初次挂载时立刻检查一次（如果用户是第二次打开，会直接命中这里）
-    checkAndSetPwaStatus();
+      const updateStatus = () => {
+        navigator.serviceWorker.ready.then((registration) => {
+          const worker = registration.installing || registration.waiting || registration.active;
+          if (!worker) {
+            setSwStatus({ state: 'error', detail: '未检测到 Service Worker' });
+            return;
+          }
 
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      checkAndSetPwaStatus();
-    });
+          if (registration.installing) {
+            setSwStatus({ state: 'installing', detail: '正在安装 Service Worker...' });
+          } else if (registration.waiting) {
+            setSwStatus({ state: 'waiting', detail: '新版本已下载，等待激活' });
+          } else if (registration.active) {
+            if (navigator.serviceWorker.controller) {
+              setSwStatus({ state: 'active', detail: '离线资源已就绪' });
+            } else {
+              setSwStatus({ state: 'active', detail: 'Service Worker 已激活，刷新后生效' });
+            }
+          }
+        }).catch(() => {
+          setSwStatus({ state: 'error', detail: '无法获取 Service Worker 状态' });
+        });
+      };
 
-    // 💡 4. 保留对正在下载/安装过程的精准追踪（处理非首次打开时的后台静默更新）
-    navigator.serviceWorker.ready.then((registration) => {
-      // 再次校准
-      checkAndSetPwaStatus();
+      updateStatus();
 
-      registration.addEventListener('updatefound', () => {
-        const newWorker = registration.installing;
-        if (!newWorker) return;
+      // 监听来自 Service Worker 的消息
+      const handleMessage = (event: MessageEvent) => {
+        if (event.data && event.data.type === 'SW_PROGRESS') {
+          const { loaded, total, current, finished } = event.data;
+          setSwStatus({
+            state: 'installing',
+            detail: `正在缓存 (${loaded}/${total})`,
+            progress: { loaded, total, current, finished }
+          });
+          if (finished) {
+            // 缓存完成，稍后会被 activate 事件更新
+            setSwStatus({ state: 'waiting', detail: '新版本已缓存，等待激活' });
+          }
+        }
+      };
 
-        newWorker.addEventListener('statechange', () => {
-          // 当新 Worker 状态发生改变时，触发检查
-          // 如果新 Worker 成功进入控制状态（或者旧的依然在控制），保持状态正确
-          checkAndSetPwaStatus();
+      navigator.serviceWorker.addEventListener('message', handleMessage);
+
+      const handleControllerChange = () => {
+        updateStatus();
+      };
+
+      navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
+
+      // 监听已有注册的更新
+      navigator.serviceWorker.ready.then((registration) => {
+        registration.addEventListener('updatefound', () => {
+          setSwStatus({ state: 'installing', detail: '发现新版本，正在下载...' });
+          const newWorker = registration.installing;
+          if (newWorker) {
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'installed') {
+                setSwStatus({ state: 'waiting', detail: '新版本已下载，等待激活' });
+              } else if (newWorker.state === 'activated') {
+                setSwStatus({ state: 'active', detail: '新版本已激活' });
+              }
+            });
+          }
         });
       });
-    });
-  }, []);
+
+      return () => {
+        navigator.serviceWorker.removeEventListener('message', handleMessage);
+        navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange);
+      };
+    }, []);
 
   // 🛠️ 1. 修复 refreshVFS 里的 controller 作用域与报错问题
   const refreshVFS = useCallback(async (isManual = false) => {
@@ -714,7 +761,7 @@ export default function App() {
     (window as any).__debug_editor = editor;
   };
 
-// 以下是完整的 return 语句（保持原有结构，仅修改右侧输出区域）
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#121212', color: '#e0e0e0', position: 'fixed', top: 0, left: 0 }}>
       {/* 顶部状态栏（无改动） */}
@@ -765,9 +812,21 @@ export default function App() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: 'auto' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#111', padding: '4px 12px', borderRadius: '20px', border: '1px solid #222', flexShrink: 0 }}>
-            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isPwaCached ? '#38bdf8' : '#eab308', boxShadow: isPwaCached ? '0 0 8px #38bdf8' : '0 0 8px #eab308' }} />
-            <span style={{ fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", color: isPwaCached ? '#aaa' : '#eab308' }}>
-              {isPwaCached ? 'OFFLINE_ASSETS_READY' : 'DOWNLOADING_ASSETS...'}
+            <span style={{
+              width: '8px', height: '8px', borderRadius: '50%',
+              background:
+                swStatus.state === 'active' ? '#38bdf8' :
+                swStatus.state === 'installing' ? '#eab308' :
+                swStatus.state === 'waiting' ? '#f59e0b' :
+                swStatus.state === 'error' ? '#ef4444' : '#6b7280',
+              boxShadow: swStatus.state === 'active' ? '0 0 8px #38bdf8' : '0 0 8px #eab308'
+            }} />
+            <span style={{ fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", color: '#aaa' }}>
+              {swStatus.state === 'active' && 'PWA READY'}
+              {swStatus.state === 'installing' && (swStatus.progress ? `CACHE ${swStatus.progress.loaded}/${swStatus.progress.total}` : 'INSTALLING')}
+              {swStatus.state === 'waiting' && 'UPDATE PENDING'}
+              {swStatus.state === 'loading' && 'CHECKING'}
+              {swStatus.state === 'error' && 'SW ERROR'}
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#111', padding: '4px 12px', borderRadius: '20px', border: '1px solid #222', flexShrink: 0 }}>
@@ -956,9 +1015,9 @@ export default function App() {
                           </div>
                           <div style={{ padding: '12px 16px', fontFamily: "'JetBrains Mono', monospace", fontSize: '14px', background: '#0d0d0d' }}>
                             {/* 表头：与数据行字体一致，宽度对齐 */}
-                            <div style={{ display: 'flex', alignItems: 'center', padding: '2px 0', color: '#888', fontFamily: "'JetBrains Mono', monospace", fontSize: '14px', marginBottom: '4px' }}>
-                              <span style={{ width: '60px', flexShrink: 0 }}></span>
-                              <span style={{ width: '60px', flexShrink: 0 }}></span>
+                            <div style={{ display: 'flex', alignItems: 'center', padding: '1px 0', color: '#888', fontFamily: "'JetBrains Mono', monospace", fontSize: '14px', marginBottom: '4px' }}>
+                              <span style={{ width: '40px', flexShrink: 0 }}></span>
+                              <span style={{ width: '40px', flexShrink: 0 }}></span>
                               <span style={{ color: '#333', marginRight: '10px' }}>|</span>
                               <span style={{ display: 'flex', gap: '4px' }}>
                                 {Array.from({ length: 16 }, (_, i) => (
@@ -976,11 +1035,11 @@ export default function App() {
                               const addr2Str = addr2.toString(16).toUpperCase().padStart(4, '0');
 
                               return (
-                                <div key={rowIdx} style={{ display: 'flex', alignItems: 'center', padding: '2px 0' }}>
-                                  <span style={{ color: '#569cd6', width: '60px', flexShrink: 0 }}>
+                                <div key={rowIdx} style={{ display: 'flex', alignItems: 'center', padding: '1px 0' }}>
+                                  <span style={{ color: '#569cd6', width: '40px', flexShrink: 0 }}>
                                     {addr1Str}
                                   </span>
-                                  <span style={{ color: '#569cd6', width: '60px', flexShrink: 0 }}>
+                                  <span style={{ color: '#569cd6', width: '40px', flexShrink: 0 }}>
                                     {addr2Str}
                                   </span>
                                   <span style={{ color: '#333', marginRight: '10px' }}>|</span>

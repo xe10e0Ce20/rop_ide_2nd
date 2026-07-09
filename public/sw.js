@@ -1,28 +1,57 @@
-const VERSION = '0.0.1'
+const VERSION = '0.0.1';
 const CACHE_NAME = 'rop-ide';
 const ASSETS = [
   '/',
   '/index.html',
   '/favicon.ico',
+  // 可继续添加更多资源
 ];
 
-// 1. 安装阶段：强行预缓存核心静态资源
+// 发送进度消息给所有受控的客户端
+function postProgress(message) {
+  self.clients.matchAll({ type: 'window' }).then(clients => {
+    clients.forEach(client => client.postMessage(message));
+  });
+}
+
 self.addEventListener('install', (event) => {
+  console.log('// VFS_PWA: 开始预缓存离线资源...');
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      console.log('// VFS_PWA: 正在预缓存离线静态资源...');
-      return Promise.all(
-        ASSETS.map(asset => {
-          return cache.add(asset).catch(err => {
-            console.warn(`// VFS_PWA: 静态资产 [${asset}] 预缓存失败，已跳过:`, err);
+    caches.open(CACHE_NAME).then(async (cache) => {
+      const total = ASSETS.length;
+      let loaded = 0;
+
+      for (const asset of ASSETS) {
+        try {
+          await cache.add(asset);
+          loaded++;
+          postProgress({
+            type: 'SW_PROGRESS',
+            loaded,
+            total,
+            current: asset,
+            finished: loaded === total
           });
-        })
-      );
-    }).then(() => self.skipWaiting())
+        } catch (err) {
+          console.warn(`// VFS_PWA: 预缓存失败 [${asset}]`, err);
+          loaded++;
+          postProgress({
+            type: 'SW_PROGRESS',
+            loaded,
+            total,
+            current: asset,
+            finished: loaded === total,
+            error: err.toString()
+          });
+        }
+      }
+
+      console.log('// VFS_PWA: 预缓存完成');
+      return self.skipWaiting();
+    })
   );
 });
 
-// 2. 激活阶段：清理旧版本缓存，夺权
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
@@ -34,43 +63,32 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    }).then(() => self.clients.claim()) // 配合前端实现免刷新初次就绪
+    }).then(() => self.clients.claim())
   );
 });
 
-// 3. 拦截请求
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
   const url = new URL(event.request.url);
 
   if (url.pathname.endsWith('/version')) {
-    // 强制走网络通道，绝不查 PWA 本地缓存
     event.respondWith(
-      fetch(event.request).catch((err) => {
-        console.warn('// VFS_PWA: 获取线上 version 失败（可能处于完全离线状态）');
-        return new Response('OFFLINE', { status: 200 }); // 离线时兜底返回，防止前端 fetch 崩溃
-      })
+      fetch(event.request).catch(() => new Response('OFFLINE', { status: 200 }))
     );
     return;
   }
 
-  // 正常的静态资源和页面策略
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
+      if (cachedResponse) return cachedResponse;
 
-      // 如果是导航请求（比如刷新了子路由 /settings），且缓存未命中，回退到 index.html
       if (event.request.mode === 'navigate') {
         return caches.match('/index.html');
       }
 
-      // 尝试走网络请求
       return fetch(event.request).catch((err) => {
-        console.error('// VFS_PWA: 处于完全离线状态且无该资源缓存:', event.request.url, err);
-        // 如果想要对图片或核心组件返回兜底文件，可以在这里控制
+        console.error('// VFS_PWA: 离线且无缓存:', event.request.url, err);
       });
     })
   );
