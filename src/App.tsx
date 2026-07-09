@@ -166,7 +166,7 @@ export default function App() {
             const isControlled = !!navigator.serviceWorker.controller;
             setSwStatus({ 
               state: 'active', 
-              detail: isControlled ? 'SW PWA OK' : 'SW READY (UNCONTROLLED)' 
+              detail: isControlled ? 'SW PWA OK' : 'SW READY(UNCONTROLLED)' 
             });
           } else if (worker.state === 'redundant') {
             setSwStatus({ state: 'error', detail: 'SW REDUNDANT' });
@@ -821,7 +821,7 @@ export default function App() {
                 borderRadius: '50%',
                 background:
                   swStatus.detail === 'SW PWA OK' ? '#00ffb3' :          // 完全受控控制
-                  swStatus.detail === 'SW READY (UNCONTROLLED)' ? '#469be5' :// 已激活但未控制
+                  swStatus.detail === 'SW READY(UNCONTROLLED)' ? '#469be5' :// 已激活但未控制
                   swStatus.state === 'installing' ? '#eab308' :           // 🟡 黄色：资源下载中
                   swStatus.state === 'waiting' ? '#f59e0b' :              // 🟠 橙色：等待更新应用
                   swStatus.state === 'error' ? '#ef4444' : '#6b7280',     // 🔴 红色 / ⚪ 灰色
