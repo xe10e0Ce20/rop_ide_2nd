@@ -98,12 +98,22 @@ export default function RopInfoModal({ isOpen, onClose, pwaVersion = pkg.version
 
           <hr style={{ border: 'none', borderTop: '1px solid #222', margin: '16px 0' }} />
 
-          {/* Release Notes */}
+          {/* Tool Chain */}
           <h3 style={{ margin: '0 0 12px 0', color: '#fff', fontFamily: "'JetBrains Mono', monospace", fontSize: '14px', textAlign: 'left' }}>🔨 工具链 / Tool Chain</h3>
           <div style={{ marginBottom: '8px', textAlign: 'left' }}>
             <ul style={{ margin: '4px 0 0 0', paddingLeft: '20px', color: '#ccc', textAlign: 'left' }}>
               <li style={{ marginBottom: '4px' }}>ggt-finder: gadget查找器</li><a href="https://ggt-finder.pages.dev/" style={{ color: '#38bdf8'}}>ggt-finder.pages.dev/</a>
               <li style={{ marginBottom: '4px' }}>disas生成器（基于users的反汇编器开发，用于提供ggt-finder能识别的_disas）</li><a href="https://tieba.baidu.com/p/10780399354" style={{ color: '#38bdf8'}}>贴吧</a>
+            </ul>
+          </div>
+
+          <hr style={{ border: 'none', borderTop: '1px solid #222', margin: '16px 0' }} />
+
+          <h3 style={{ margin: '0 0 12px 0', color: '#fff', fontFamily: "'JetBrains Mono', monospace", fontSize: '14px', textAlign: 'left' }}>相关项目</h3>
+          <div style={{ marginBottom: '8px', textAlign: 'left' }}>
+            <ul style={{ margin: '4px 0 0 0', paddingLeft: '20px', color: '#ccc', textAlign: 'left' }}>
+              <li style={{ marginBottom: '4px' }}>wlyibo开发的同名项目</li><a href="https://ropide.pages.dev/" style={{ color: '#38bdf8'}}>RopIDE</a>
+              <li style={{ marginBottom: '4px' }}>ROP-IDE一代（已弃用）</li><a href="https://rop-ide.pages.dev/" style={{ color: '#38bdf8'}}>ROP-IDE</a>
             </ul>
           </div>
 
