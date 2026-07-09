@@ -277,7 +277,9 @@ export default function RopLibraryModal({
                     </select>
                   </div>
                 </div>
-                <div style={{ fontSize: '12px', color: '#aaa', textAlign:'left' }}>{lib.description || '无描述声明.'}</div>
+                <div style={{ fontSize: '12px', color: '#aaa', textAlign: 'left', whiteSpace: 'pre-wrap' }}>
+                  {lib.description || '无描述声明.'}
+                </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
                   <span style={{ fontSize: '11px', color: '#555' }}>by {lib.author}</span>
                   <div style={{ display: 'flex', gap: '8px' }}>
@@ -315,7 +317,9 @@ export default function RopLibraryModal({
                   </div>
                 </div>
                 
-                <div style={{ fontSize: '12px', color: '#aaa' }}>{snippet.description || '此代码资产无说明描述。'}</div>
+                <div style={{ fontSize: '12px', color: '#aaa', whiteSpace: 'pre-wrap' }}>
+                  {snippet.description || '此代码资产无说明描述。'}
+                </div>
                 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
                   <span style={{ fontSize: '11px', color: '#555' }}>by {snippet.author}</span>
