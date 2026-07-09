@@ -1000,7 +1000,13 @@ export default function App() {
                       未检测到有效的 block 输出。
                     </div>
                   ) : (
-                    Object.keys(blocks).map((blockName) => {
+                    Object.keys(blocks)
+                    .sort((a, b) => {
+                      if (a === activeBlockName) return -1;
+                      if (b === activeBlockName) return 1;
+                      return 0;
+                    })
+                    .map((blockName) => {
                       const hexStr = blocks[blockName];
                       const bytes = hexStr.match(/.{1,2}/g) || [];
                       const isActive = activeBlockName === blockName;
