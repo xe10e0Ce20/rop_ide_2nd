@@ -188,7 +188,7 @@ export default function App() {
             const isControlled = !!navigator.serviceWorker.controller;
             setSwStatus({ 
               state: 'active', 
-              detail: isControlled ? 'SW PWA OK' : 'PWA READY(UNCONTROLLED)' 
+              detail: isControlled ? 'SW PWA OK' : 'SW READY(UNCONTROLLED)' 
             });
           }
 
