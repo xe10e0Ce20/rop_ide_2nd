@@ -257,7 +257,7 @@ export default function RopLibraryModal({
               </div>
               {onManualRefresh && (
                 <button type="button" onClick={onManualRefresh} disabled={isRefreshing} style={{ background: '#222', border: '1px solid #333', color: isRefreshing ? '#555' : '#00ffb3', padding: '2px 10px', fontSize: '11px', borderRadius: '4px', cursor: isRefreshing ? 'not-allowed' : 'pointer' }}>
-                  {isRefreshing ? '🔄 重载中...' : '🔄 局部重载 VFS'}
+                  {isRefreshing ? '🔄 刷新中...' : '🔄 刷新 VFS'}
                 </button>
               )}
             </div>
