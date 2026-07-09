@@ -320,14 +320,14 @@ export default function App() {
           let errorColumn = 1;
           const lines = code.split('\n');
           for (let i = 0; i < lines.length; i++) {
-            if (lines[i].includes(`@import`) && lines[i].includes(libName)) {
+            if (lines[i].includes(`@include`) && lines[i].includes(libName)) {
               errorLine = i + 1;
-              errorColumn = lines[i].indexOf('@import') + 1;
+              errorColumn = lines[i].indexOf('@include') + 1;
               break;
             }
           }
           interceptedError = {
-            message: `[VFS LINK DISASTER]: 找不到指定的映射依赖项 "@import(${libName})"。`,
+            message: `[VFS LINK DISASTER]: 找不到指定的映射依赖项 "@include(${libName})"。`,
             line: errorLine,
             column: errorColumn
           };
@@ -343,9 +343,9 @@ export default function App() {
           let errorColumn = 1;
           const lines = code.split('\n');
           for (let i = 0; i < lines.length; i++) {
-            if (lines[i].includes(`@import`) && lines[i].includes(libName)) {
+            if (lines[i].includes(`@include`) && lines[i].includes(libName)) {
               errorLine = i + 1;
-              errorColumn = lines[i].indexOf('@import') + 1;
+              errorColumn = lines[i].indexOf('@include') + 1;
               break;
             }
           }
@@ -538,13 +538,13 @@ export default function App() {
     });
     monaco.editor.setTheme('ropTheme');
 
-    // 获取增强源码（匹配标准 `@import(std_io)` 去掉 @ 前缀库查找逻辑）
+    // 获取增强源码（匹配标准 `@include(std_io)` 去掉 @ 前缀库查找逻辑）
     const getAugmentedSourceForMetadata = (src: string): string => {
       const lines = src.split('\n');
-      const importPattern = /^@import\s*\(\s*([a-zA-Z_]\w*)\s*\)(?:\s*\/\/.*)?\s*$/;
+      const includePattern = /^@include\s*\(\s*([a-zA-Z_]\w*)\s*\)(?:\s*\/\/.*)?\s*$/;
       let augmented = src;
       for (const line of lines) {
-        const match = line.trim().match(importPattern);
+        const match = line.trim().match(includePattern);
         if (match) {
           const libName = match[1];
           const versionTag = match[2];
@@ -567,7 +567,7 @@ export default function App() {
       return vfsLibsRef.current.map(lib => lib.name);
     };
 
-    // 自动补全 (传入两个回调，分别用于宏/内建提示解析，以及 @import 库名补全提示)
+    // 自动补全 (传入两个回调，分别用于宏/内建提示解析，以及 @include 库名补全提示)
     monaco.languages.registerCompletionItemProvider(
       ROP_LANG_ID,
       createRopCompletionProvider(getAutocompleteMetaWithLibs, getAvailableLibNames)

@@ -201,7 +201,7 @@ export default function RopLibraryModal({
     onUpdateVfs();
   };
 
-  const triggerImportSnippet = (snippet: PublicSnippet) => {
+  const triggerIncludeSnippet = (snippet: PublicSnippet) => {
     const activeVerData = snippet.versions[snippet.activeVersion];
     if (!activeVerData) return alert("当前选择的版本快照数据损坏或为空");
 
@@ -224,7 +224,7 @@ export default function RopLibraryModal({
 
         {/* 顶部大类切换 */}
         <div style={{ display: 'flex', background: '#111', borderBottom: '1px solid #2d2d2d', padding: '0 20px' }}>
-          <button onClick={() => setAssetType('package')} style={{ background: 'none', border: 'none', borderBottom: assetType === 'package' ? '2px solid #00ffb3' : '2px solid transparent', color: assetType === 'package' ? '#00ffb3' : '#777', padding: '12px 20px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>📦 依赖库 (Packages/Imports)</button>
+          <button onClick={() => setAssetType('package')} style={{ background: 'none', border: 'none', borderBottom: assetType === 'package' ? '2px solid #00ffb3' : '2px solid transparent', color: assetType === 'package' ? '#00ffb3' : '#777', padding: '12px 20px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>📦 依赖库 (Packages/Libs)</button>
           <button onClick={() => setAssetType('snippet')} style={{ background: 'none', border: 'none', borderBottom: assetType === 'snippet' ? '2px solid #38bdf8' : '2px solid transparent', color: assetType === 'snippet' ? '#38bdf8' : '#777', padding: '12px 20px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}>📄 代码 (Standalone Snippets)</button>
         </div>
 
@@ -321,7 +321,7 @@ export default function RopLibraryModal({
                   <span style={{ fontSize: '11px', color: '#555' }}>by {snippet.author}</span>
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <button type="button" onClick={() => handleCopyToClipboard(snippet.versions[snippet.activeVersion]?.code || '', snippet.title)} style={{ background: '#222', border: '1px solid #333', color: '#e0e0e0', padding: '3px 8px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer' }}>📋 复制代码</button>
-                    <button type="button" onClick={() => triggerImportSnippet(snippet)} style={{ background: '#222', border: '1px solid #333', color: '#00ffb3', padding: '3px 8px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>⚡ 载入并覆写当前工作区</button>
+                    <button type="button" onClick={() => triggerIncludeSnippet(snippet)} style={{ background: '#222', border: '1px solid #333', color: '#00ffb3', padding: '3px 8px', fontSize: '11px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>⚡ 载入并覆写当前工作区</button>
                     
                     {/* 如果是云端快照，提供同步缓存至本地持久层选项 */}
                     {!snippet.isLocal && (

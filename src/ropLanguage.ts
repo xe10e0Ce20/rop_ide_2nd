@@ -4,7 +4,7 @@ export const ROP_LANG_ID = 'rop';
 export const languageDef = {
     // 依然保留关键字定义，作为全字匹配参考
     keywords: ['def', 'block', 'yield'],
-    directives: ['@offset', '@filler', '@import'],
+    directives: ['@offset', '@filler', '@include'],
     
     tokenizer: {
         root: [

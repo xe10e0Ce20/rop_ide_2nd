@@ -158,9 +158,9 @@ export function createRopCompletionProvider(
         startLineNumber: 1, startColumn: 1,
         endLineNumber: position.lineNumber, endColumn: position.column
       });
-      const isInsideImport = /@import\s*\(\s*[^)]*$/.test(textUntilPosition);
+      const isInsideInclude = /@include\s*\(\s*[^)]*$/.test(textUntilPosition);
 
-      if (isInsideImport && getAvailableLibs) {
+      if (isInsideInclude && getAvailableLibs) {
         const suggestions = getAvailableLibs().map(lib => ({
           label: lib,
           kind: monaco.languages.CompletionItemKind.Module,
@@ -172,7 +172,7 @@ export function createRopCompletionProvider(
       }
 
       const staticKeywords = ['def', 'block', 'yield'];
-      const builtInFields = ['@offset', '@filler', '@import'];
+      const builtInFields = ['@offset', '@filler', '@include'];
       const suggestions: any[] = [];
       const foundLabels: string[] = [];
       const currentLine = position.lineNumber;
@@ -359,7 +359,7 @@ export function createRopHoverProvider(
 
       // 1. 从元数据获取参数名
       let params: string[] = [];
-      let isImported = false;
+      let isIncluded = false;
       try {
         const meta = getWasmMetadata(currentCode);
         if (meta?.macro_names?.includes(targetWord)) {
@@ -371,7 +371,7 @@ export function createRopHoverProvider(
               break;
             }
           }
-          isImported = !hasLocal;
+          isIncluded = !hasLocal;
         }
       } catch (e) { }
 
@@ -388,9 +388,9 @@ export function createRopHoverProvider(
 
       // 3. 从导入库源码提取
       if (defLineNumber === -1 && params.length === 0 && getLibSource) {
-        const importRegex = /@import\s*\(\s*([a-zA-Z_]\w*(?:[-.][a-zA-Z_]\w*)*)\s*\)/g;
+        const includeRegex = /@include\s*\(\s*([a-zA-Z_]\w*(?:[-.][a-zA-Z_]\w*)*)\s*\)/g;
         let match;
-        while ((match = importRegex.exec(currentCode)) !== null) {
+        while ((match = includeRegex.exec(currentCode)) !== null) {
           const libName = match[1];
           const libSource = getLibSource(libName);
           if (libSource) {
@@ -399,7 +399,7 @@ export function createRopHoverProvider(
             if (defLine) {
               const m = defLine.match(/\(([^)]*)\)/);
               if (m) params = m[1].split(',').map(s => s.trim()).filter(Boolean);
-              isImported = true;
+              isIncluded = true;
               break;
             }
           }
@@ -407,8 +407,8 @@ export function createRopHoverProvider(
       }
 
       // 💡 核心修复：放行 0 参数的外部依赖库宏。
-      // 只要它是合法的外部库导入宏 (isImported === true)，即使参数长度为 0，也绝不拦截返回 null！
-      if (!isImported && defLineNumber === -1) return null;
+      // 只要它是合法的外部库导入宏 (isIncluded === true)，即使参数长度为 0，也绝不拦截返回 null！
+      if (!isIncluded && defLineNumber === -1) return null;
 
       // 4. 构建签名
       if (params.length === 0 && defLineText) {
@@ -429,10 +429,10 @@ export function createRopHoverProvider(
             break;
           }
         }
-      } else if (isImported && getLibSource) {
-        const importRegex = /@import\s*\(\s*([a-zA-Z_]\w*(?:[-.][a-zA-Z_]\w*)*)\s*\)/g;
+      } else if (isIncluded && getLibSource) {
+        const includeRegex = /@include\s*\(\s*([a-zA-Z_]\w*(?:[-.][a-zA-Z_]\w*)*)\s*\)/g;
         let match;
-        while ((match = importRegex.exec(currentCode)) !== null) {
+        while ((match = includeRegex.exec(currentCode)) !== null) {
           const libSource = getLibSource(match[1]);
           if (libSource) {
             const found = extractMacroDocFromSource(libSource, targetWord);

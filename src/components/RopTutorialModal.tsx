@@ -94,8 +94,8 @@ block main {
     {
       id: 'annotations 注解',
       title: '基础03 // 注解 (ANNOTATIONS)',
-      description: '使用三个注解：@offset, @filler, @import 执行一些"编译外"操作',
-      codeExample: `@import(lib_name)      // 引入公共库中的库，建议在旁边的注释写明版本号
+      description: '使用三个注解：@offset, @filler, @include 执行一些"编译外"操作',
+      codeExample: `@include(lib_name)      // 引入公共库中的库，建议在旁边的注释写明版本号
 
 block main{
 
@@ -107,7 +107,7 @@ block main{
 .. .1  //输出3331
 }`,
       points: [
-        '@import(lib_name) 会在虚拟文件系统里查找对应的活动版本镜像并导入，建议在公共库界面中将导入的库缓存，防止网络环境拖慢速度。',
+        '@include(lib_name) 会在虚拟文件系统里查找对应的活动版本镜像并导入，建议在公共库界面中将导入的库缓存，防止网络环境拖慢速度。',
         '@filler 接收一个0-f的字符，用于定义"."占位符的值。',
         '@offset 用于改变地址标签的偏移量，会在地址标签的章节讲到。'
       ]
@@ -196,7 +196,7 @@ def example(arg:2b) {
 // ----------------------------------------
 // 在你自己的主脚本里，你只需要：
 // ----------------------------------------
-@import(example)  //v1.0.0
+@include(example)  //v1.0.0
 //最好在导入库时注明当前导入的是哪个版本，防止以后库更新后造成不必要的困惑
 
 block main {
