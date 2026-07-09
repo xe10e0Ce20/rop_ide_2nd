@@ -127,79 +127,86 @@ export default function App() {
       return cachedData === null || cachedData === '' ? getSampleCode() : cachedData;
     });
 
-    // 在 App.tsx 内注入以下检测逻辑：
     const [swStatus, setSwStatus] = useState<{
       state: 'loading' | 'installing' | 'waiting' | 'active' | 'error';
       detail?: string;
       progress?: { loaded: number; total: number; current?: string; finished?: boolean };
-    }>({ state: 'loading', detail: '正在检查 Service Worker...' });
+    }>({ state: 'loading', detail: 'CHECKING' });
 
     useEffect(() => {
       if (!('serviceWorker' in navigator)) {
-        setSwStatus({ state: 'error', detail: '浏览器不支持 Service Worker' });
+        setSwStatus({ state: 'error', detail: 'NO SW' });
         return;
       }
 
+      // 1. 监听自定义高频预缓存进度
       const handleMessage = (event: MessageEvent) => {
         if (event.data && event.data.type === 'SW_PROGRESS') {
-          const { loaded, total, current, finished } = event.data;
-          setSwStatus({
-            state: 'installing',
-            detail: `正在缓存 (${loaded}/${total})`,
-            progress: { loaded, total, current, finished }
-          });
-          if (finished) {
-            setSwStatus({ state: 'waiting', detail: '新版本已缓存，等待激活' });
+          const { loaded, total, finished } = event.data;
+          if (!finished) {
+            setSwStatus({
+              state: 'installing',
+              detail: `DOWNLOADING ${loaded}/${total}`, // 👈 修改：让用户看懂是在下载更新
+              progress: { loaded, total }
+            });
           }
         }
       };
-
-      const setupInstallingWorker = (registration: ServiceWorkerRegistration) => {
-        const worker = registration.installing;
-        if (!worker) return;
-        worker.addEventListener('statechange', () => {
-          if (worker.state === 'installed') {
-            setSwStatus({ state: 'waiting', detail: 'UPDATE_READY' });
-          } else if (worker.state === 'activated') {
-            setSwStatus({ state: 'active', detail: 'PWA' });
-          }
-        });
-      };
-
-      const handleControllerChange = () => {
-        navigator.serviceWorker.ready.then((reg) => {
-          if (reg.active && navigator.serviceWorker.controller) {
-            setSwStatus({ state: 'active', detail: 'PWA' });
-          }
-        });
-      };
-
-      // 初始化状态
-      navigator.serviceWorker.ready.then((registration) => {
-        // 如果正在安装，可能已经错过了 progress 消息，但我们可以直接进入 waiting/active 状态
-        if (registration.installing) {
-          setSwStatus({ state: 'installing', detail: '正在安装...' });
-          setupInstallingWorker(registration);
-        } else if (registration.waiting) {
-          setSwStatus({ state: 'waiting', detail: 'UPDATE_READY' });
-        } else if (registration.active) {
-          if (navigator.serviceWorker.controller) {
-            setSwStatus({ state: 'active', detail: 'PWA' });
-          } else {
-            setSwStatus({ state: 'active', detail: 'SW' }); // 激活但未控制页面（首次安装）
-          }
-        }
-
-        // 监听后续更新
-        registration.addEventListener('updatefound', () => {
-          setSwStatus({ state: 'installing', detail: '发现新版本...' });
-          setupInstallingWorker(registration);
-        });
-      }).catch(() => {
-        setSwStatus({ state: 'error', detail: '无法获取 SW' });
-      });
-
       navigator.serviceWorker.addEventListener('message', handleMessage);
+
+      // 辅助函数：绑定具体 Worker 状态机
+      const monitorWorkerState = (worker: ServiceWorker) => {
+        const updateState = () => {
+          if (worker.state === 'installing') {
+            setSwStatus(prev => prev.state === 'installing' ? prev : { state: 'installing', detail: 'NEW VERSION FOUND' });
+          } else if (worker.state === 'installed') {
+            setSwStatus({ state: 'waiting', detail: 'UPDATE READY' }); // 👈 修改：提示更新就绪
+          } else if (worker.state === 'activated') {
+            // 根据是否接管 controller，拆分出两种就绪状态
+            const isControlled = !!navigator.serviceWorker.controller;
+            setSwStatus({ 
+              state: 'active', 
+              detail: isControlled ? 'SW PWA OK' : 'SW READY (UNCONTROLLED)' 
+            });
+          } else if (worker.state === 'redundant') {
+            setSwStatus({ state: 'error', detail: 'SW REDUNDANT' });
+          }
+        };
+
+        worker.addEventListener('statechange', updateState);
+        updateState();
+      };
+
+      // 2. 初始化检查
+      navigator.serviceWorker.ready
+        .then((registration) => {
+          if (registration.installing) {
+            monitorWorkerState(registration.installing);
+          } else if (registration.waiting) {
+            setSwStatus({ state: 'waiting', detail: 'UPDATE READY' });
+          } else if (registration.active) {
+            const isControlled = !!navigator.serviceWorker.controller;
+            setSwStatus({ 
+              state: 'active', 
+              detail: isControlled ? 'SW PWA OK' : 'PWA READY(UNCONTROLLED)' 
+            });
+          }
+
+          // 3. 监听后续更新
+          registration.addEventListener('updatefound', () => {
+            if (registration.installing) {
+              monitorWorkerState(registration.installing);
+            }
+          });
+        })
+        .catch(() => {
+          setSwStatus({ state: 'error', detail: 'SW ERROR' });
+        });
+
+      // 4. 控制器更替时触发
+      const handleControllerChange = () => {
+        setSwStatus({ state: 'active', detail: 'SW PWA OK' });
+      };
       navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
 
       return () => {
@@ -806,23 +813,27 @@ export default function App() {
           </button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: 'auto' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#111', padding: '4px 12px', borderRadius: '20px', border: '1px solid #222', flexShrink: 0 }}>
-            <span style={{
-              width: '8px', height: '8px', borderRadius: '50%',
-              background:
-                swStatus.state === 'active' ? '#38bdf8' :
-                swStatus.state === 'installing' ? '#eab308' :
-                swStatus.state === 'waiting' ? '#f59e0b' :
-                swStatus.state === 'error' ? '#ef4444' : '#6b7280',
-              boxShadow: swStatus.state === 'active' ? '0 0 8px #38bdf8' : '0 0 8px #eab308'
-            }} />
-            <span style={{ fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", color: '#aaa' }}>
-              {swStatus.state === 'active' && 'PWA READY'}
-              {swStatus.state === 'installing' && (swStatus.progress ? `CACHE ${swStatus.progress.loaded}/${swStatus.progress.total}` : 'INSTALLING')}
-              {swStatus.state === 'waiting' && 'UPDATE PENDING'}
-              {swStatus.state === 'loading' && 'SW CHECKING'}
-              {swStatus.state === 'error' && 'SW ERROR'}
-            </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: 'auto' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#111', padding: '4px 12px', borderRadius: '20px', border: '1px solid #222', flexShrink: 0 }}>
+              <span style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background:
+                  swStatus.detail === 'SW PWA OK' ? '#00ffb3' :          // 完全受控控制
+                  swStatus.detail === 'SW READY (UNCONTROLLED)' ? '#469be5' :// 已激活但未控制
+                  swStatus.state === 'installing' ? '#eab308' :           // 🟡 黄色：资源下载中
+                  swStatus.state === 'waiting' ? '#f59e0b' :              // 🟠 橙色：等待更新应用
+                  swStatus.state === 'error' ? '#ef4444' : '#6b7280',     // 🔴 红色 / ⚪ 灰色
+                boxShadow: 
+                  swStatus.detail === 'SW PWA OK' ? '0 0 8px #06b6d4' : 
+                  swStatus.state === 'installing' ? '0 0 8px #eab308' : 'none',
+                transition: 'all 0.2s ease'
+              }} />
+              <span style={{ fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", color: '#aaa', letterSpacing: '0.3px' }}>
+                {swStatus.detail}
+              </span>
+            </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#111', padding: '4px 12px', borderRadius: '20px', border: '1px solid #222', flexShrink: 0 }}>
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isOnline ? '#00ffb3' : '#ff5555', boxShadow: isOnline ? '0 0 8px #00ffb3' : '0 0 8px #ff5555' }} />

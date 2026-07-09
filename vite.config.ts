@@ -1,4 +1,3 @@
-// vite.config.ts
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -7,7 +6,11 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate', // 当检测到新版本时自动更新 Service Worker
+      registerType: 'autoUpdate',
+      // 切换到 injectManifest 模式，使用自定义 SW 模板
+      strategies: 'injectManifest',
+      srcDir: 'src',           // SW 模板所在目录（与 App.tsx 同级）
+      filename: 'sw.js',       // 输出文件名
       manifest: {
         "short_name": "ROP IDE 2nd",
         "name": "ROP IDE 2nd Edition",
@@ -32,10 +35,12 @@ export default defineConfig({
         "display": "standalone",
         "orientation": "any"
       },
-      workbox: {
-        // 自动匹配并预缓存所有 Vite 编译出来的静态资源（HTML/JS/CSS/字体等）
+      injectManifest: {
+        // 预缓存注入点：Workbox 会将自动抓取的文件清单插入此处
+        injectionPoint: 'self.__WB_MANIFEST',
+        // 自动抓取的文件类型（与之前的 globPatterns 一致）
         globPatterns: ['**/*.{ts,js,css,html,ico,png,svg,woff2,woff,ttf,wasm}'],
-        maximumFileSizeToCacheInBytes: 12 * 1024 * 1024
+        maximumFileSizeToCacheInBytes: 12 * 1024 * 1024,
       }
     })
   ]
