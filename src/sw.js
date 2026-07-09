@@ -32,7 +32,7 @@ precacheController.addToCacheList(manifest);
 
 // 监听原生的 install 阶段
 self.addEventListener('install', (event) => {
-  sendProgressToClients(''); // 发送初始 0/% 状态
+  sendProgressToClients(''); // 发送初始 0 进度状态
   event.waitUntil(precacheController.install(event));
 });
 
@@ -41,14 +41,31 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(precacheController.activate(event));
 });
 
-// 4. 拦截全局请求，安全地交由 precache 匹配
+// 4. 【完美修复】：严格过滤跨域资源，只对同源静态资源做 match 匹配
 self.addEventListener('fetch', (event) => {
-  const responsePromise = precacheController.match(event.request);
-  if (responsePromise) {
-    // 只要是在自动抓取清单（__WB_MANIFEST）里的静态资源，100% 走本地离线缓存
-    event.respondWith(responsePromise);
+  const url = new URL(event.request.url);
+
+  // 核心防御线：如果是跨域请求（例如 cloudflare.com 或外部 API），直接放行走网络，绝不让 precacheController 碰它
+  if (url.origin !== self.location.origin) {
+    return; // 放弃对 fetch 事件的 respondWith 拦截，让浏览器走正常网络通道或外层路由
   }
-  // 如果清单里没有，就会自动滑落到下方的自定义 registerRoute 规则中
+
+  // 只有本站同源请求，才进入预缓存匹配
+  event.respondWith(
+    (async () => {
+      try {
+        const cachedResponse = await precacheController.match(event.request);
+        if (cachedResponse) {
+          return cachedResponse; // 命中打包产物清单，直接离线返回
+        }
+      } catch (err) {
+        console.error('Precache match error:', err);
+      }
+      
+      // 未命中预缓存的本站请求（如页面路由等），直接发起网络请求
+      return fetch(event.request);
+    })()
+  );
 });
 
 // 5. 统一的推送通知函数
@@ -67,23 +84,23 @@ function sendProgressToClients(currentUrl) {
 }
 
 // ==========================================
-// 6. 你的其他自定义路由策略 (滑落请求走这里)
+// 6. 你的其他自定义路由策略
 // ==========================================
 
 // 版本号等动态 API：网络优先
 registerRoute(
-  ({ url }) => url.pathname.endsWith('/version'),
+  ({ url }) => url.origin === self.location.origin && url.pathname.endsWith('/version'),
   new NetworkFirst({ cacheName: 'rop-version' })
 );
 
-// 页面入口 HTML：网络优先（防卡死，能在有网时及时加载最新的 main.js 入口）
+// 页面入口 HTML：网络优先
 registerRoute(
-  ({ request }) => request.destination === 'document',
+  ({ request, url }) => url.origin === self.location.origin && request.destination === 'document',
   new NetworkFirst({ cacheName: 'rop-pages' })
 );
 
-// 其它没有被 vite-plugin-pwa 预抓取覆盖到的静态资源：缓存优先
+// 其它没有被预抓取完全覆盖到的本站静态资源：缓存优先
 registerRoute(
-  ({ request }) => ['script', 'style', 'image', 'font'].includes(request.destination),
+  ({ request, url }) => url.origin === self.location.origin && ['script', 'style', 'image', 'font'].includes(request.destination),
   new CacheFirst({ cacheName: 'rop-static' })
 );
