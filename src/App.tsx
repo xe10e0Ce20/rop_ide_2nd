@@ -962,7 +962,7 @@ export default function App() {
                               <span style={{ color: '#333', marginRight: '10px' }}>|</span>
                               <span style={{ display: 'flex', gap: '4px' }}>
                                 {Array.from({ length: 16 }, (_, i) => (
-                                  <span key={i} style={{ width: '2.5ch', textAlign: 'center' }}>
+                                  <span key={i} style={{ width: '2.48ch', textAlign: 'center' }}>
                                     {i.toString(16).toUpperCase()}
                                   </span>
                                 ))}
