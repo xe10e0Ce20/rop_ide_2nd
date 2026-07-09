@@ -62,6 +62,9 @@ export default function App() {
   const spanMapRef = useRef<Record<string, [number, number, number, number][]>>({});
   const activeBlockRef = useRef<string | null>(null);
 
+  const [offset1, setOffset1] = useState<number>(0xD710); // 第一基址
+  const [offset2, setOffset2] = useState<number>(0xE9E0); // 第二基址
+
   const fetchCloudVersion = useCallback(async () => {
     try {
       // 💡 请求 public/version 物理文件，加时间戳破掉 SW/浏览器缓存
@@ -711,23 +714,16 @@ export default function App() {
     (window as any).__debug_editor = editor;
   };
 
+// 以下是完整的 return 语句（保持原有结构，仅修改右侧输出区域）
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#121212', color: '#e0e0e0', position: 'fixed', top: 0, left: 0 }}>
-      {/* 顶部状态栏 */}
+      {/* 顶部状态栏（无改动） */}
       <div style={{ padding: '12px 24px', background: '#1a1a1a', borderBottom: '1px solid #2d2d2d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        {/* 左侧区域：标题与控制键 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#00ffb3' }}>ROP IDE 2nd</h2>
-          
-          {/* 版本流展示区域 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", fontWeight: 'bold' }}>
-            {/* 本地代码版本 */}
             <span style={{ color: '#909090' }}>LOCAL:{pkg.version}</span>
-            
-            {/* 分隔符 */}
             <span style={{ color: '#333' }}>/</span>
-            
-            {/* 云端最新版本 */}
             <span style={{ 
               color: cloudVersion === 'loading...' ? '#666' : (cloudVersion === pkg.version ? '#38bdf8' : '#ff5555'),
               background: cloudVersion !== 'loading...' && cloudVersion !== pkg.version ? 'rgba(255, 85, 85, 0.15)' : 'transparent',
@@ -739,7 +735,6 @@ export default function App() {
               CLOUD:{cloudVersion}
             </span>
           </div>
-          
           <button 
             type="button"
             onClick={() => setIsModalOpen(true)}
@@ -749,7 +744,6 @@ export default function App() {
           >
             📦 公共库/Global Library
           </button>
-
           <button 
             type="button"
             onClick={() => setIsInfoOpen(true)}
@@ -759,7 +753,6 @@ export default function App() {
           >
             📰 信息/Notes
           </button>
-
           <button 
             type="button"
             onClick={() => setIsTutorialOpen(true)}
@@ -770,25 +763,19 @@ export default function App() {
             📖 教程/Tutorial
           </button>
         </div>
-        
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: 'auto' }}>
-          
-          {/* PWA 离线缓存就绪指示灯 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#111', padding: '4px 12px', borderRadius: '20px', border: '1px solid #222', flexShrink: 0 }}>
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isPwaCached ? '#38bdf8' : '#eab308', boxShadow: isPwaCached ? '0 0 8px #38bdf8' : '0 0 8px #eab308' }} />
             <span style={{ fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", color: isPwaCached ? '#aaa' : '#eab308' }}>
               {isPwaCached ? 'OFFLINE_ASSETS_READY' : 'DOWNLOADING_ASSETS...'}
             </span>
           </div>
-
-          {/* 网络在线状态指示灯 */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#111', padding: '4px 12px', borderRadius: '20px', border: '1px solid #222', flexShrink: 0 }}>
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isOnline ? '#00ffb3' : '#ff5555', boxShadow: isOnline ? '0 0 8px #00ffb3' : '0 0 8px #ff5555' }} />
             <span style={{ fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", color: isOnline ? '#aaa' : '#ff8888' }}>
               {isOnline ? 'ONLINE' : 'OFFLINE'}
             </span>
           </div>
-
         </div>
       </div>
 
@@ -810,23 +797,22 @@ export default function App() {
           />
         </div>
 
-        {/* 优化后的中央分割线 */}
+        {/* 中央分割线 */}
         <div 
           onMouseDown={handleMouseDown} 
           onTouchStart={handleTouchStart} 
           style={{ 
             width: '10px',
-            margin: '0 -2px',           // 负 margin 产生隐形热区，完全不撑开/破坏两边编辑器的原有像素位置
-            background: isDragging ? '#1fd8a1' : '#222', // 👈 核心：由状态驱动背景色，快速滑动绝不熄灭
+            margin: '0 -2px',
+            background: isDragging ? '#1fd8a1' : '#222',
             cursor: 'col-resize',       
             display: 'flex', 
             alignItems: 'center', 
             justifyContent: 'center', 
             zIndex: 10,
             transition: 'background 0.2s ease, box-shadow 0.2s ease',
-            boxShadow: isDragging ? '0 0 8px #1fd8a1' : 'none', // 选中时带有一层极轻的荧光外发光
+            boxShadow: isDragging ? '0 0 8px #1fd8a1' : 'none',
           }}
-          // 仅在非拖拽状态下响应普通的 Hover
           onMouseEnter={(e) => {
             if (!isDragging) {
               e.currentTarget.style.background = '#333';
@@ -840,18 +826,19 @@ export default function App() {
             }
           }}
         >
-          {/* 中间的装饰刻度线 */}
           <div style={{ 
             width: '2px', 
             height: '30px', 
-            background: isDragging ? '#000' : '#444', // 激活时装饰线变暗，反衬亮色底
+            background: isDragging ? '#000' : '#444',
             pointerEvents: 'none',
             transition: 'background 0.2s ease'
           }} />
         </div>
 
+        {/* 右侧面板 */}
         <div style={{ flex: 1, height: '100%', display: 'flex', flexDirection: 'column', background: '#0d0d0d' }}>
           {activeViewLib ? (
+            // 库预览界面（不变）
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
               <div style={{ background: '#161616', padding: '10px 20px', borderBottom: '1px solid #252525', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ fontSize: '13px', fontFamily: "'JetBrains Mono', monospace" }}> 
@@ -884,8 +871,51 @@ export default function App() {
             </div>
           ) : (
             <div style={{ flex: 1, overflowY: 'auto', padding: '24px', fontFamily: "'JetBrains Mono', monospace", fontSize: '14px' }}>
-              <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#666', letterSpacing: '1px', textTransform: 'uppercase', borderBottom: '1px solid #222', paddingBottom: '8px', marginBottom: '16px' }}>
-                Console & Binary Stream
+              {/* 标题行 + 基址输入框（同一行） */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #222', paddingBottom: '8px', marginBottom: '16px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#666', letterSpacing: '1px', textTransform: 'uppercase' }}>
+                  Console & Binary Stream
+                </span>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  <span style={{ fontSize: '12px', color: '#888' }}>基址1:</span>
+                  <input
+                    type="text"
+                    value={`0x${offset1.toString(16).toUpperCase()}`}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 16);
+                      if (!isNaN(val)) setOffset1(val);
+                    }}
+                    style={{
+                      width: '80px',
+                      background: '#111',
+                      border: '1px solid #333',
+                      color: '#00ffb3',
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: '12px',
+                      padding: '2px 6px',
+                      borderRadius: '4px'
+                    }}
+                  />
+                  <span style={{ fontSize: '12px', color: '#888' }}>基址2:</span>
+                  <input
+                    type="text"
+                    value={`0x${offset2.toString(16).toUpperCase()}`}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 16);
+                      if (!isNaN(val)) setOffset2(val);
+                    }}
+                    style={{
+                      width: '80px',
+                      background: '#111',
+                      border: '1px solid #333',
+                      color: '#00ffb3',
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: '12px',
+                      padding: '2px 6px',
+                      borderRadius: '4px'
+                    }}
+                  />
+                </div>
               </div>
               
               {compileOutput && !compileOutput.success && (
@@ -925,33 +955,59 @@ export default function App() {
                             </span>
                           </div>
                           <div style={{ padding: '12px 16px', fontFamily: "'JetBrains Mono', monospace", fontSize: '14px', background: '#0d0d0d' }}>
-                            {rows.map((row, rowIdx) => (
-                              <div key={rowIdx} style={{ display: 'flex', alignItems: 'center', padding: '2px 0' }}>
-                                <span style={{ color: '#569cd6', width: '80px', flexShrink: 0 }}>
-                                  +0x{(rowIdx * 16).toString(16).toUpperCase().padStart(4, '0')}
-                                </span>
-                                <span style={{ color: '#333', marginRight: '10px' }}>|</span>
-                                <span style={{ display: 'flex', gap: '4px' }}>
-                                  {row.map((byteHex, byteIdx) => {
-                                    const byteOffset = rowIdx * 16 + byteIdx;
-                                    const isHighlighted = ranges.some(r => byteOffset >= r.start && byteOffset < r.end);
-                                    return (
-                                      <span
-                                        key={byteIdx}
-                                        style={{
-                                          color: isHighlighted ? '#000' : '#ce9178',
-                                          backgroundColor: isHighlighted ? '#00ffb3' : 'transparent',
-                                          padding: '1px 2px',
-                                          borderRadius: '2px',
-                                        }}
-                                      >
-                                        {byteHex.toUpperCase()}
-                                      </span>
-                                    );
-                                  })}
-                                </span>
-                              </div>
-                            ))}
+                            {/* 表头：与数据行字体一致，宽度对齐 */}
+                            <div style={{ display: 'flex', alignItems: 'center', padding: '2px 0', color: '#888', fontFamily: "'JetBrains Mono', monospace", fontSize: '14px', marginBottom: '4px' }}>
+                              <span style={{ width: '60px', flexShrink: 0 }}></span>
+                              <span style={{ width: '60px', flexShrink: 0 }}></span>
+                              <span style={{ color: '#333', marginRight: '10px' }}>|</span>
+                              <span style={{ display: 'flex', gap: '4px' }}>
+                                {Array.from({ length: 16 }, (_, i) => (
+                                  <span key={i} style={{ width: '2.5ch', textAlign: 'center' }}>
+                                    {i.toString(16).toUpperCase()}
+                                  </span>
+                                ))}
+                              </span>
+                            </div>
+
+                            {rows.map((row, rowIdx) => {
+                              const addr1 = (offset1 + rowIdx * 16) & 0xFFFF;
+                              const addr2 = (offset2 + rowIdx * 16) & 0xFFFF;
+                              const addr1Str = addr1.toString(16).toUpperCase().padStart(4, '0');
+                              const addr2Str = addr2.toString(16).toUpperCase().padStart(4, '0');
+
+                              return (
+                                <div key={rowIdx} style={{ display: 'flex', alignItems: 'center', padding: '2px 0' }}>
+                                  <span style={{ color: '#569cd6', width: '60px', flexShrink: 0 }}>
+                                    {addr1Str}
+                                  </span>
+                                  <span style={{ color: '#569cd6', width: '60px', flexShrink: 0 }}>
+                                    {addr2Str}
+                                  </span>
+                                  <span style={{ color: '#333', marginRight: '10px' }}>|</span>
+                                  <span style={{ display: 'flex', gap: '4px' }}>
+                                    {row.map((byteHex, byteIdx) => {
+                                      const byteOffset = rowIdx * 16 + byteIdx;
+                                      const isHighlighted = ranges.some(r => byteOffset >= r.start && byteOffset < r.end);
+                                      return (
+                                        <span
+                                          key={byteIdx}
+                                          style={{
+                                            color: isHighlighted ? '#000' : '#ce9178',
+                                            backgroundColor: isHighlighted ? '#00ffb3' : 'transparent',
+                                            padding: '1px 2px',
+                                            borderRadius: '2px',
+                                            width: '2ch',
+                                            textAlign: 'center',
+                                          }}
+                                        >
+                                          {byteHex.toUpperCase()}
+                                        </span>
+                                      );
+                                    })}
+                                  </span>
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       );
@@ -969,12 +1025,11 @@ export default function App() {
         onClose={() => setIsModalOpen(false)} 
         currentCode={code} 
         vfsLibs={vfsLibs}
-        publicSnippets={publicSnippets} // 传入全新 V2 版本的片段数组
+        publicSnippets={publicSnippets}
         isRefreshing={isRefreshing}
         onManualRefresh={() => refreshVFS(true)}
         onUpdateVfs={refreshVFS}
         onDirectViewLib={(lib) => {
-          // 依赖库的常规查看（不覆盖工作区）
           setActiveViewLib(lib);
           setIsModalOpen(false);
         }}
