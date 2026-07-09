@@ -996,7 +996,6 @@ export default function App() {
 }
 
 function getSampleCode(): string {
-  return `
-@offset(0xd710)
+  return `//欢迎来到ROP IDE 2nd！
 block main {}`;
 }
