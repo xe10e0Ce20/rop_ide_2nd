@@ -239,7 +239,7 @@ export default function RopLibraryModal({
             <form onSubmit={handleSaveOrPublish} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <input style={{ background: '#111', border: '1px solid #333', color: '#fff', padding: '8px', fontSize: '12px', borderRadius: '4px' }} placeholder={assetType === 'package' ? "库名称" : "代码标题"} value={name} onChange={e => setName(e.target.value)} />
               <input style={{ background: '#111', border: '1px solid #333', color: '#fff', padding: '8px', fontSize: '12px', borderRadius: '4px' }} placeholder="版本号 (如 1.0.0)" value={version} onChange={e => setVersion(e.target.value)} />
-              <input style={{ background: '#111', border: '1px solid #333', color: '#fff', padding: '8px', fontSize: '12px', borderRadius: '4px' }} placeholder="署名维护者" value={author} onChange={e => setAuthor(e.target.value)} />
+              <input style={{ background: '#111', border: '1px solid #333', color: '#fff', padding: '8px', fontSize: '12px', borderRadius: '4px' }} placeholder="署名贡献者" value={author} onChange={e => setAuthor(e.target.value)} />
               <textarea style={{ background: '#111', border: '1px solid #333', color: '#fff', padding: '8px', fontSize: '12px', height: '80px', resize: 'none', borderRadius: '4px' }} placeholder="简短补充说明..." value={desc} onChange={e => setDesc(e.target.value)} />
               
               <button type="submit" style={{ background: assetType === 'package' ? (isLocalMode ? '#00ffb3' : '#00e1d9') : (isLocalMode ? '#38bdf8' : '#a855f7'), color: '#000', border: 'none', padding: '10px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}>
@@ -277,7 +277,7 @@ export default function RopLibraryModal({
                     </select>
                   </div>
                 </div>
-                <div style={{ fontSize: '12px', color: '#aaa' }}>{lib.description || '无描述声明.'}</div>
+                <div style={{ fontSize: '12px', color: '#aaa', textAlign:'left' }}>{lib.description || '无描述声明.'}</div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
                   <span style={{ fontSize: '11px', color: '#555' }}>by {lib.author}</span>
                   <div style={{ display: 'flex', gap: '8px' }}>
