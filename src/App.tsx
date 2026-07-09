@@ -1024,6 +1024,76 @@ export default function App() {
                               block <span style={{ color: '#00ffb3' }}>{blockName}</span>
                               {isActive && <span style={{ marginLeft: '8px', color: '#888', fontSize: '12px' }}>◀ 当前高亮</span>}
                             </span>
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                              <button
+                                type="button"
+                                onClick={() => navigator.clipboard.writeText(hexStr)}
+                                title="复制十六进制字节码"
+                                style={{
+                                  background: '#222',
+                                  border: '1px solid #333',
+                                  color: '#ccc',
+                                  padding: '2px 8px',
+                                  fontSize: '11px',
+                                  fontFamily: "'JetBrains Mono', monospace",
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                📋 复制
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const byteArray = new Uint8Array(hexStr.match(/.{1,2}/g)!.map(b => parseInt(b, 16)));
+                                  const blob = new Blob([byteArray], { type: 'application/octet-stream' });
+                                  const url = URL.createObjectURL(blob);
+                                  const a = document.createElement('a');
+                                  a.href = url;
+                                  a.download = `${blockName}.bin`;
+                                  a.click();
+                                  URL.revokeObjectURL(url);
+                                }}
+                                title="下载 .bin 文件"
+                                style={{
+                                  background: '#222',
+                                  border: '1px solid #333',
+                                  color: '#ccc',
+                                  padding: '2px 8px',
+                                  fontSize: '11px',
+                                  fontFamily: "'JetBrains Mono', monospace",
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                💾 .bin
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const blob = new Blob([hexStr], { type: 'text/plain' });
+                                  const url = URL.createObjectURL(blob);
+                                  const a = document.createElement('a');
+                                  a.href = url;
+                                  a.download = `${blockName}.txt`;
+                                  a.click();
+                                  URL.revokeObjectURL(url);
+                                }}
+                                title="下载 .txt 文件"
+                                style={{
+                                  background: '#222',
+                                  border: '1px solid #333',
+                                  color: '#ccc',
+                                  padding: '2px 8px',
+                                  fontSize: '11px',
+                                  fontFamily: "'JetBrains Mono', monospace",
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                📄 .txt
+                              </button>
+                            </div>
                           </div>
                           <div style={{ padding: '12px 16px', fontFamily: "'JetBrains Mono', monospace", fontSize: '14px', background: '#0d0d0d' }}>
                             {/* 表头：与数据行字体一致，宽度对齐 */}
